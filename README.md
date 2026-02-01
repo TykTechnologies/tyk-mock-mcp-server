@@ -181,6 +181,61 @@ After adding the configuration:
 2. The server will appear in the MCP servers list
 3. All 14 tools, 4 prompts, and 3 resources will be available
 
+### Registering with Claude Code
+
+To use this server with Claude Code or other MCP clients that support streamable-http transport, add it to your MCP settings configuration file:
+
+**Location:**
+- macOS/Linux: `~/.config/Code/User/globalStorage/rooveterinaryinc.roo-cline/settings/mcp_settings.json`
+- Windows: `%APPDATA%\Code\User\globalStorage\rooveterinaryinc.roo-cline\settings\mcp_settings.json`
+
+**Configuration:**
+
+```json
+{
+  "mcpServers": {
+    "tyk-mock-mcp": {
+      "type": "streamable-http",
+      "url": "https://your-server-domain.example.com/mcp",
+      "alwaysAllow": [
+        "get_anything"
+      ],
+      "headers": {
+        "Authorization": "your-auth-token-here"
+      },
+      "disabled": false
+    }
+  }
+}
+```
+
+**Configuration Options:**
+- `type`: Must be `"streamable-http"` for SSE-based transport
+- `url`: The server endpoint (use ngrok or similar for exposing local server)
+- `alwaysAllow`: Optional array of tool names to auto-approve without user confirmation
+- `headers`: Optional HTTP headers to include with requests (e.g., authentication)
+- `disabled`: Set to `true` to temporarily disable the server without removing configuration
+
+**Example with ngrok:**
+
+If you're running the server locally and want to expose it via ngrok:
+
+```bash
+# Start the MCP server
+./tyk-mock-mcp-server
+
+# In another terminal, expose via ngrok
+ngrok http 7878
+
+# Use the ngrok URL in your configuration
+# https://<random-subdomain>.ngrok-free.app/mcp
+```
+
+After adding the configuration:
+1. Reload VS Code/Claude Code
+2. The server will appear in the MCP servers list
+3. Tools in the `alwaysAllow` list won't require confirmation prompts
+
 ### Registering with Other MCP Clients
 
 For other MCP-compatible clients (IDEs, editors, custom applications):
