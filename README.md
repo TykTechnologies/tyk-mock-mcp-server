@@ -79,6 +79,27 @@ tyk-mock-mcp-server/
 
 ## Installation
 
+### As a Library (For Integration Tests)
+
+You can import this server in your integration tests (e.g., Tyk Gateway tests) to test JSON-RPC/MCP features:
+
+```go
+import "github.com/TykTechnologies/tyk-mock-mcp-server/testserver"
+
+func TestMyMCPFeature(t *testing.T) {
+    // Start mock MCP server on random port
+    mcpServer, cleanup := testserver.StartServer(0)
+    defer cleanup()
+
+    // Use mcpServer.URL in your API configuration
+    // Access mcpServer.Store for test assertions
+}
+```
+
+**See [testserver/README.md](testserver/README.md) for detailed usage patterns and examples.**
+
+### As a Standalone Server
+
 ### Using Go
 
 ```bash
