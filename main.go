@@ -603,7 +603,7 @@ func startHTTPServer(mcpServer *mcp.Server, port string) *http.Server {
 
 	mux.Handle("/mcp", wrappedHandler)
 
-	// SSE test endpoints for gateway SSE proxy testing (TT-16661).
+	// SSE test endpoints for gateway SSE proxy testing.
 	mux.HandleFunc("/sse/stream", ssehandler.StreamHandler)
 	mux.HandleFunc("/sse/crash", ssehandler.CrashHandler)
 

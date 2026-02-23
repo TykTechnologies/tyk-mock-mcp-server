@@ -443,7 +443,7 @@ Echoes back request data in httpbin.org/anything format with **real HTTP request
 
 These endpoints serve raw SSE streams outside the MCP protocol. They are designed
 for testing gateway SSE proxy behaviour (timeout handling, Content-Type detection,
-upstream crash simulation). See [TT-16661].
+upstream crash simulation).
 
 #### `GET /sse/stream` — Configurable SSE stream
 
