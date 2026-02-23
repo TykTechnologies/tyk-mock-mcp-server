@@ -4,7 +4,7 @@ A comprehensive mock MCP (Model Context Protocol) server built with Go, implemen
 
 ## Features
 
-### 14 Tools Across 5 Categories
+### 15 Tools Across 6 Categories
 
 #### 👥 User Management
 - `get_users` - Retrieve mock users with filtering options (role, active status)
@@ -29,6 +29,13 @@ A comprehensive mock MCP (Model Context Protocol) server built with Go, implemen
 - `generate_uuid` - UUID v4 generation
 - `format_date` - Date formatting (iso, rfc3339, unix, custom)
 - `get_anything` - Echo back request data with **real HTTP metadata** (client IP, headers) in httpbin.org/anything format
+
+#### Testing
+- `slow_response` - Respond after a configurable delay (for gateway timeout testing)
+
+### SSE Test Endpoints (non-MCP)
+- `GET /sse/stream` - Configurable SSE event stream (event count, pacing, charset)
+- `GET /sse/crash` - SSE stream that crashes after N events (upstream failure simulation)
 
 ### 4 Contextual Prompts
 - `user_management` - User operations guidance
@@ -163,6 +170,8 @@ PORT=3000 ./tyk-mock-mcp-server
 
 **Endpoints:**
 - MCP: `http://localhost:7878/mcp`
+- SSE stream: `http://localhost:7878/sse/stream`
+- SSE crash: `http://localhost:7878/sse/crash`
 - Health: `http://localhost:7878/health`
 
 ### Configuration
@@ -173,6 +182,7 @@ Configure the server using environment variables:
 |----------|-------------|---------|
 | `PORT` | HTTP server port | `7878` |
 | `DEBUG` | Enable debug logging (true/1) | `false` |
+| `WRITE_TIMEOUT` | HTTP write timeout in seconds (0 = disabled) | `0` |
 
 ## MCP Client Configuration
 
@@ -428,6 +438,65 @@ Echoes back request data in httpbin.org/anything format with **real HTTP request
   "origin": "203.0.113.45",  // Real client IP (respects X-Forwarded-For, X-Real-IP)
   "url": "https://mock-api.example.com/anything?page=1&limit=10"
 }
+
+### SSE Test Endpoints
+
+These endpoints serve raw SSE streams outside the MCP protocol. They are designed
+for testing gateway SSE proxy behaviour (timeout handling, Content-Type detection,
+upstream crash simulation). See [TT-16661].
+
+#### `GET /sse/stream` — Configurable SSE stream
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `events` | Number of events to send | `10` |
+| `delay_ms` | Milliseconds between events | `1000` |
+| `charset` | Appended to Content-Type (e.g. `utf-8`) | _(none)_ |
+
+```bash
+# 30 events, one per 5 seconds (~150s total, exceeds default 120s write_timeout)
+curl -N "http://localhost:7878/sse/stream?events=30&delay_ms=5000"
+
+# SSE with charset parameter in Content-Type
+curl -N "http://localhost:7878/sse/stream?events=5&delay_ms=500&charset=utf-8"
+```
+
+Sends a `done` event after the last message event. Detects client disconnects
+via context cancellation and stops sending.
+
+#### `GET /sse/crash` — Upstream crash simulation
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `events_before_crash` | Events to send before crashing | `3` |
+| `delay_ms` | Milliseconds between events | `1000` |
+| `charset` | Appended to Content-Type (e.g. `utf-8`) | _(none)_ |
+
+```bash
+# Send 3 events then abruptly close the TCP connection
+curl -N "http://localhost:7878/sse/crash?events_before_crash=3&delay_ms=1000"
+```
+
+After sending the configured events, the handler hijacks the underlying TCP
+connection and closes it without sending any HTTP framing or SSE termination.
+This simulates an upstream server crash.
+
+#### `slow_response` MCP Tool
+
+An MCP tool that responds after a configurable delay. Useful for testing
+gateway timeout behaviour with MCP tool calls over SSE transport.
+
+```json
+{
+  "name": "slow_response",
+  "arguments": {
+    "delay_seconds": 150,
+    "message": "optional custom message"
+  }
+}
+```
+
+Respects context cancellation (client disconnect stops the timer).
 
 ### Available Task Commands
 
