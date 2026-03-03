@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/TykTechnologies/tyk-mock-mcp-server/handlers/prompts"
 	"github.com/TykTechnologies/tyk-mock-mcp-server/handlers/resources"
+	ssehandler "github.com/TykTechnologies/tyk-mock-mcp-server/handlers/streaming"
 	"github.com/TykTechnologies/tyk-mock-mcp-server/models"
 	"github.com/TykTechnologies/tyk-mock-mcp-server/store"
 	"github.com/google/uuid"
@@ -114,7 +116,7 @@ func setupServer() *mcp.Server {
 	registerResources(server, dataStore)
 
 	log.Printf("Initialized %s v%s", serverName, serverVersion)
-	log.Println("Registered 14 tools, 4 prompts, and 3 resources")
+	log.Println("Registered 15 tools, 4 prompts, and 3 resources")
 
 	return server
 }
@@ -408,6 +410,40 @@ func registerTools(server *mcp.Server, s *store.Store) {
 			URL:     url,
 		}, nil
 	})
+
+	// Testing Tools
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "slow_response",
+		Description: "Respond after a configurable delay. Useful for testing gateway timeout behaviour with MCP tool calls.",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, input models.SlowResponseInput) (*mcp.CallToolResult, models.SlowResponseOutput, error) {
+		if input.DelaySeconds <= 0 {
+			return nil, models.SlowResponseOutput{}, fmt.Errorf("delay_seconds must be positive")
+		}
+		if input.DelaySeconds > 600 {
+			return nil, models.SlowResponseOutput{}, fmt.Errorf("delay_seconds must not exceed 600")
+		}
+
+		startedAt := time.Now().UTC().Format(time.RFC3339)
+
+		select {
+		case <-time.After(time.Duration(input.DelaySeconds) * time.Second):
+			// completed normally
+		case <-ctx.Done():
+			return nil, models.SlowResponseOutput{}, ctx.Err()
+		}
+
+		msg := input.Message
+		if msg == "" {
+			msg = fmt.Sprintf("Response delivered after %d second delay", input.DelaySeconds)
+		}
+
+		return nil, models.SlowResponseOutput{
+			Message:      msg,
+			DelaySeconds: input.DelaySeconds,
+			StartedAt:    startedAt,
+			CompletedAt:  time.Now().UTC().Format(time.RFC3339),
+		}, nil
+	})
 }
 
 func registerPrompts(server *mcp.Server) {
@@ -567,6 +603,10 @@ func startHTTPServer(mcpServer *mcp.Server, port string) *http.Server {
 
 	mux.Handle("/mcp", wrappedHandler)
 
+	// SSE test endpoints for gateway SSE proxy testing.
+	mux.HandleFunc("/sse/stream", ssehandler.StreamHandler)
+	mux.HandleFunc("/sse/crash", ssehandler.CrashHandler)
+
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		if debugMode {
 			log.Printf("💚 Health check from %s", r.RemoteAddr)
@@ -576,17 +616,21 @@ func startHTTPServer(mcpServer *mcp.Server, port string) *http.Server {
 		fmt.Fprintf(w, `{"status":"healthy","version":"%s"}`, serverVersion)
 	})
 
+	writeTimeout := parseEnvDuration("WRITE_TIMEOUT", 0)
+
 	httpServer := &http.Server{
 		Addr:         ":" + port,
 		Handler:      mux,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		WriteTimeout: writeTimeout,
 		IdleTimeout:  60 * time.Second,
 	}
 
 	go func() {
 		log.Printf("Starting HTTP server on port %s", port)
 		log.Printf("MCP endpoint: http://localhost:%s/mcp", port)
+		log.Printf("SSE stream endpoint: http://localhost:%s/sse/stream", port)
+		log.Printf("SSE crash endpoint: http://localhost:%s/sse/crash", port)
 		log.Printf("Health endpoint: http://localhost:%s/health", port)
 
 		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -595,6 +639,21 @@ func startHTTPServer(mcpServer *mcp.Server, port string) *http.Server {
 	}()
 
 	return httpServer
+}
+
+// parseEnvDuration reads a duration in seconds from an environment variable.
+// Returns defaultVal when the variable is unset or unparseable.
+func parseEnvDuration(envKey string, defaultVal time.Duration) time.Duration {
+	s := os.Getenv(envKey)
+	if s == "" {
+		return defaultVal
+	}
+	secs, err := strconv.Atoi(s)
+	if err != nil || secs < 0 {
+		log.Printf("Invalid %s value %q, using default %v", envKey, s, defaultVal)
+		return defaultVal
+	}
+	return time.Duration(secs) * time.Second
 }
 
 func waitForShutdown(httpServer *http.Server) {
