@@ -493,6 +493,21 @@ func registerResources(server *mcp.Server, dataStore *store.Store) {
 		Description: "All blog posts with their content and status",
 		MIMEType:    "application/json",
 	}, resourcesHandler.Posts)
+
+	// Resource templates
+	server.AddResourceTemplate(&mcp.ResourceTemplate{
+		URITemplate: "file://{path}",
+		Name:        "File Resource",
+		Description: "Access a file by path",
+		MIMEType:    "application/octet-stream",
+	}, resourcesHandler.FileTemplate)
+
+	server.AddResourceTemplate(&mcp.ResourceTemplate{
+		URITemplate: "db://{schema}/{table}",
+		Name:        "Database Table",
+		Description: "Access a database table by schema and table name",
+		MIMEType:    "application/json",
+	}, resourcesHandler.DBTemplate)
 }
 
 type responseWriter struct {
