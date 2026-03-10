@@ -72,3 +72,27 @@ func (h *ResourcesHandler) Posts(ctx context.Context, req *mcp.ReadResourceReque
 		},
 	}, nil
 }
+
+func (h *ResourcesHandler) FileTemplate(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	return &mcp.ReadResourceResult{
+		Contents: []*mcp.ResourceContents{
+			{
+				URI:      req.Params.URI,
+				MIMEType: "application/octet-stream",
+				Text:     "mock file content",
+			},
+		},
+	}, nil
+}
+
+func (h *ResourcesHandler) DBTemplate(ctx context.Context, req *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+	return &mcp.ReadResourceResult{
+		Contents: []*mcp.ResourceContents{
+			{
+				URI:      req.Params.URI,
+				MIMEType: "application/json",
+				Text:     `{"rows": []}`,
+			},
+		},
+	}, nil
+}
