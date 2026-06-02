@@ -112,11 +112,12 @@ func setupServer() *mcp.Server {
 	}, nil)
 
 	registerTools(server, dataStore)
+	registerAcmeTools(server)
 	registerPrompts(server)
 	registerResources(server, dataStore)
 
 	log.Printf("Initialized %s v%s", serverName, serverVersion)
-	log.Println("Registered 15 tools, 4 prompts, and 3 resources")
+	log.Println("Registered 18 tools, 4 prompts, and 3 resources")
 
 	return server
 }
