@@ -40,10 +40,11 @@ type IssueRefundInput struct {
 // holds the httpbin echo, whose headers.Authorization is the exchanged token
 // the chat decodes to reveal sub + act.
 type AcmeCallOutput struct {
-	Status   int                    `json:"status"`
-	URL      string                 `json:"url"`
-	Upstream map[string]interface{} `json:"upstream,omitempty"`
-	Error    string                 `json:"error,omitempty"`
+	Status          int                    `json:"status"`
+	URL             string                 `json:"url"`
+	ResponseHeaders map[string][]string    `json:"responseHeaders,omitempty"`
+	Upstream        map[string]interface{} `json:"upstream,omitempty"`
+	Error           string                 `json:"error,omitempty"`
 }
 
 func acmeBaseURL() string {
@@ -100,6 +101,7 @@ func callAcmeAPI(ctx context.Context, method, path string, body []byte) AcmeCall
 	}
 	defer resp.Body.Close()
 	out.Status = resp.StatusCode
+	out.ResponseHeaders = resp.Header // includes WWW-Authenticate on an OAuth challenge
 
 	raw, _ := io.ReadAll(resp.Body)
 	var parsed map[string]interface{}
