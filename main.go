@@ -114,11 +114,47 @@ func setupServer() *mcp.Server {
 	registerTools(server, dataStore)
 	registerPrompts(server)
 	registerResources(server, dataStore)
+	registerOASTools(server)
 
 	log.Printf("Initialized %s v%s", serverName, serverVersion)
 	log.Println("Registered 15 tools, 4 prompts, and 3 resources")
 
 	return server
+}
+
+// registerOASTools optionally registers tools derived from one or more OpenAPI
+// specs (comma-separated MCP_OAS_PATH), each proxied to MCP_OAS_UPSTREAM_URL.
+// Disabled when MCP_OAS_PATH is unset, so default behaviour is unchanged.
+func registerOASTools(server *mcp.Server) {
+	specs := os.Getenv("MCP_OAS_PATH")
+	if specs == "" {
+		return
+	}
+	cfg := UpstreamConfig{
+		BaseURL:      envOr("MCP_OAS_UPSTREAM_URL", "http://localhost:8181"),
+		Host:         os.Getenv("MCP_OAS_UPSTREAM_HOST"),
+		ForwardAuth:  os.Getenv("MCP_OAS_FORWARD_AUTH") != "false",
+		ForwardTrace: os.Getenv("MCP_OAS_FORWARD_TRACE") != "false",
+	}
+	for _, p := range strings.Split(specs, ",") {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		names, err := RegisterFromOAS(server, p, cfg)
+		if err != nil {
+			log.Printf("OAS tools: %v", err)
+			continue
+		}
+		log.Printf("OAS tools: registered %d from %s -> %s: %v", len(names), p, cfg.BaseURL, names)
+	}
+}
+
+func envOr(k, def string) string {
+	if v := os.Getenv(k); v != "" {
+		return v
+	}
+	return def
 }
 
 func registerTools(server *mcp.Server, s *store.Store) {

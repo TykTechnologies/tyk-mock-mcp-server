@@ -183,6 +183,33 @@ Configure the server using environment variables:
 | `PORT` | HTTP server port | `7878` |
 | `DEBUG` | Enable debug logging (true/1) | `false` |
 | `WRITE_TIMEOUT` | HTTP write timeout in seconds (0 = disabled) | `0` |
+| `MCP_OAS_PATH` | Comma-separated OpenAPI 3 spec file(s) to expose as tools (see below). Unset = off | _unset_ |
+| `MCP_OAS_UPSTREAM_URL` | Base URL the OAS-derived tools call | `http://localhost:8181` |
+| `MCP_OAS_UPSTREAM_HOST` | `Host` header to send (e.g. a custom domain); empty leaves it as-is | _empty_ |
+| `MCP_OAS_FORWARD_AUTH` | Replay the inbound `Authorization` bearer on the upstream call | `true` |
+| `MCP_OAS_FORWARD_TRACE` | Forward the inbound W3C trace context (`traceparent`/`tracestate`) | `true` |
+
+### OpenAPI-driven tools
+
+In addition to the built-in mock tools, the server can **derive MCP tools from an
+OpenAPI 3 spec**. When `MCP_OAS_PATH` is set, every operation in the spec is
+registered as a tool: the input schema is built from the operation's path/query
+parameters and its `application/json` request body, and the tool name is
+`snake_case(operationId)`. At call time a generic handler rebuilds the HTTP
+request, **replays the inbound bearer**, **forwards the trace context**, and
+returns the upstream response. Authorization/scope is *not* enforced here — that
+is the gateway's job; this server only forwards.
+
+```bash
+MCP_OAS_PATH=./acme-api.oas.json \
+MCP_OAS_UPSTREAM_URL=http://localhost:8181 \
+MCP_OAS_UPSTREAM_HOST=api.acme.internal \
+  ./tyk-mock-mcp-server
+```
+
+This makes the server's tool surface match a real API contract — handy for
+integration tests that need an MCP backend mirroring an OpenAPI spec. Tests can
+also call `RegisterFromOAS(server, specPath, UpstreamConfig{...})` directly.
 
 ## MCP Client Configuration
 
