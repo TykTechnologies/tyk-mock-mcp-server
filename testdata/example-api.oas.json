@@ -1,0 +1,31 @@
+{
+  "openapi": "3.0.3",
+  "info": { "title": "example-api", "version": "1.0.0" },
+  "paths": {
+    "/items/{id}": {
+      "get": {
+        "operationId": "getItem",
+        "summary": "Get an item by id.",
+        "parameters": [
+          { "name": "id", "in": "path", "required": true, "description": "the item id", "schema": { "type": "string" } }
+        ],
+        "responses": { "200": { "description": "ok" } }
+      }
+    },
+    "/items": {
+      "post": {
+        "operationId": "createItem",
+        "summary": "Create an item.",
+        "requestBody": {
+          "required": true,
+          "content": { "application/json": { "schema": {
+            "type": "object",
+            "properties": { "name": { "type": "string" }, "qty": { "type": "number" } },
+            "required": ["name"]
+          } } }
+        },
+        "responses": { "200": { "description": "ok" } }
+      }
+    }
+  }
+}
