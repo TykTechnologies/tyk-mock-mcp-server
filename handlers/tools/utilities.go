@@ -2,6 +2,7 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"regexp"
 	"time"
@@ -112,14 +113,17 @@ func NewGetAnythingHandler() func(context.Context, *mcp.CallToolRequest, models.
 			}
 		}
 
+		data, _ := json.Marshal(body)
 		return models.GetAnythingOutput{
 			Method:  method,
 			Headers: headers,
-			Query:   query,
-			Body:    body,
+			Args:    query,
+			Data:    string(data),
+			JSON:    body,
+			Files:   make(map[string]interface{}),
+			Form:    make(map[string]interface{}),
 			URL:     url,
 			Origin:  "127.0.0.1",
-			Args:    query,
 		}, nil
 	}
 }
