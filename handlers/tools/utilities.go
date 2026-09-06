@@ -115,8 +115,7 @@ func NewGetAnythingHandler() func(context.Context, *mcp.CallToolRequest, models.
 		return models.GetAnythingOutput{
 			Method:  method,
 			Headers: headers,
-			Query:   query,
-			Body:    body,
+			JSON:    body,
 			URL:     url,
 			Origin:  "127.0.0.1",
 			Args:    query,

@@ -653,6 +653,9 @@ func startHTTPServer(mcpServer *mcp.Server, port string) *http.Server {
 	wrappedHandler := loggingMiddleware(corsMiddleware(captureRequestMiddleware(handler)))
 
 	mux.Handle("/mcp", wrappedHandler)
+	fixtures := newCacheFixtures()
+	mux.Handle("/fixtures/mcp", fixtures)
+	mux.HandleFunc("/fixtures/counters", fixtures.counters)
 
 	// SSE test endpoints for gateway SSE proxy testing.
 	mux.HandleFunc("/sse/stream", ssehandler.StreamHandler)
