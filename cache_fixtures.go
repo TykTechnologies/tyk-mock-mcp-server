@@ -52,6 +52,15 @@ func (f *cacheFixtures) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result["protocolVersion"] = "2025-03-26"
 		result["capabilities"] = map[string]any{"tools": map[string]any{}, "resources": map[string]any{}, "prompts": map[string]any{}}
 		result["serverInfo"] = map[string]any{"name": "deterministic-fixtures", "version": "1.0.0"}
+	case "server/discover":
+		result["resultType"] = "server"
+		result["supportedVersions"] = []string{"2099-01-01", "2025-03-26", "2026-07-28", "2025-11-25", "2025-06-18"}
+		result["capabilities"] = map[string]any{"tools": map[string]any{}, "prompts": map[string]any{}, "resources": map[string]any{}, "extensionCapability": map[string]any{"kept": true}}
+		result["serverInfo"] = map[string]any{"name": "deterministic-fixtures", "version": "2.0.0"}
+		result["instructions"] = "Keep this upstream instruction unchanged."
+		result["_meta"] = map[string]any{"extension": true}
+		result["cacheScope"] = "public"
+		result["ttlMs"] = 60000
 	case "tools/list", "prompts/list", "resources/list", "resources/templates/list":
 		key, field := "tools", "name"
 		switch request.Method {
