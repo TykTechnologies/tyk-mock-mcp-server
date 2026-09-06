@@ -53,7 +53,7 @@ func (f *cacheFixtures) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		result["capabilities"] = map[string]any{"tools": map[string]any{}, "resources": map[string]any{}, "prompts": map[string]any{}}
 		result["serverInfo"] = map[string]any{"name": "deterministic-fixtures", "version": "1.0.0"}
 	case "server/discover":
-		result["resultType"] = "server"
+		result["resultType"] = "complete"
 		result["supportedVersions"] = []string{"2099-01-01", "2025-03-26", "2026-07-28", "2025-11-25", "2025-06-18"}
 		result["capabilities"] = map[string]any{"tools": map[string]any{}, "prompts": map[string]any{}, "resources": map[string]any{}, "extensionCapability": map[string]any{"kept": true}}
 		result["serverInfo"] = map[string]any{"name": "deterministic-fixtures", "version": "2.0.0"}
