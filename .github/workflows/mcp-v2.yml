@@ -24,7 +24,7 @@ jobs:
           go test -json -race -count=1 ./... > artifacts/tests.json 2>&1
       - name: Produce JUnit
         if: always()
-        run: go run gotest.tools/gotestsum@v1.12.0 --junitfile artifacts/tests.xml --raw-command cat artifacts/tests.json
+        run: go run gotest.tools/gotestsum@v1.13.0 --junitfile artifacts/tests.xml --raw-command cat artifacts/tests.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
