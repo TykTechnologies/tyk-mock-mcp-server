@@ -21,7 +21,7 @@ jobs:
           git rev-parse HEAD > artifacts/commit.txt
           go list -m all > artifacts/modules.txt
           go mod verify
-          go test -json -race -count=1 ./... > artifacts/tests.json 2>&1
+          go test -json -race -count=1 ./... > artifacts/tests.json 2> artifacts/tests.log
       - name: Produce JUnit
         if: always()
         run: go run gotest.tools/gotestsum@v1.13.0 --junitfile artifacts/tests.xml --raw-command cat artifacts/tests.json
