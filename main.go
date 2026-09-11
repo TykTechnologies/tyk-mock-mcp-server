@@ -642,12 +642,7 @@ func captureRequestMiddleware(next http.Handler) http.Handler {
 func startHTTPServer(mcpServer *mcp.Server, port string) *http.Server {
 	mux := http.NewServeMux()
 
-	handler := mcp.NewStreamableHTTPHandler(func(r *http.Request) *mcp.Server {
-		if debugMode {
-			log.Printf("🔧 MCP Handler: Returning server instance for request")
-		}
-		return mcpServer
-	}, nil)
+	handler := newProtocolSwitchHandler(mcpServer)
 
 	// Wrap handler with middleware (order matters: logging -> CORS -> capture -> handler)
 	wrappedHandler := loggingMiddleware(corsMiddleware(captureRequestMiddleware(handler)))
