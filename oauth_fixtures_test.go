@@ -56,6 +56,65 @@ func registerFixtureClient(t *testing.T, client *http.Client, baseURL string, re
 	return registration.ClientID
 }
 
+func TestOAuthFixtureAuthenticatedRegistrationDelete(t *testing.T) {
+	_, server, client := newOAuthFixtureServer(t)
+	redirectURI := "https://client.example/callback"
+	body := `{"redirect_uris":["` + redirectURI + `"],"token_endpoint_auth_method":"none"}`
+	response, err := client.Post(server.URL+oauthFixturePrefix+"/register", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registration struct {
+		ClientID                string `json:"client_id"`
+		RegistrationClientURI   string `json:"registration_client_uri"`
+		RegistrationAccessToken string `json:"registration_access_token"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&registration); err != nil {
+		response.Body.Close()
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusCreated || registration.ClientID == "" ||
+		registration.RegistrationClientURI != server.URL+oauthFixturePrefix+"/register/"+registration.ClientID ||
+		registration.RegistrationAccessToken == "" {
+		t.Fatalf("registration status=%d body=%+v", response.StatusCode, registration)
+	}
+
+	deleteRequest, err := http.NewRequest(http.MethodDelete, registration.RegistrationClientURI, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteRequest.Header.Set("Authorization", "Bearer wrong-token")
+	response, err = client.Do(deleteRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("wrong management token status=%d", response.StatusCode)
+	}
+
+	deleteRequest, err = http.NewRequest(http.MethodDelete, registration.RegistrationClientURI, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleteRequest.Header.Set("Authorization", "Bearer "+registration.RegistrationAccessToken)
+	response, err = client.Do(deleteRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("registration delete status=%d", response.StatusCode)
+	}
+
+	response = authorizeFixture(t, client, server.URL, registration.ClientID, redirectURI, nil)
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("deleted client authorize status=%d", response.StatusCode)
+	}
+}
+
 func authorizeFixture(t *testing.T, client *http.Client, baseURL, clientID, redirectURI string, extra url.Values) *http.Response {
 	t.Helper()
 	query := url.Values{

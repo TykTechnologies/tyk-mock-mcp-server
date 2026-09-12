@@ -60,31 +60,33 @@ type oauthCapture struct {
 // only by local integration tests. It stores no caller credentials or bearer
 // values in captures and can be reset between test namespaces.
 type oauthFixtures struct {
-	mu          sync.Mutex
-	config      oauthFixtureConfig
-	mcpHandler  http.Handler
-	sequence    int
-	clients     map[string]oauthClient
-	codes       map[string]oauthCode
-	access      map[string]oauthGrant
-	refresh     map[string]oauthGrant
-	usedCodes   map[string]struct{}
-	usedRefresh map[string]struct{}
-	counters    map[string]int
-	captures    []oauthCapture
+	mu                 sync.Mutex
+	config             oauthFixtureConfig
+	mcpHandler         http.Handler
+	sequence           int
+	clients            map[string]oauthClient
+	registrationTokens map[string]string
+	codes              map[string]oauthCode
+	access             map[string]oauthGrant
+	refresh            map[string]oauthGrant
+	usedCodes          map[string]struct{}
+	usedRefresh        map[string]struct{}
+	counters           map[string]int
+	captures           []oauthCapture
 }
 
 func newOAuthFixtures(mcpHandler http.Handler, config oauthFixtureConfig) *oauthFixtures {
 	return &oauthFixtures{
-		config:      config,
-		mcpHandler:  mcpHandler,
-		clients:     make(map[string]oauthClient),
-		codes:       make(map[string]oauthCode),
-		access:      make(map[string]oauthGrant),
-		refresh:     make(map[string]oauthGrant),
-		usedCodes:   make(map[string]struct{}),
-		usedRefresh: make(map[string]struct{}),
-		counters:    make(map[string]int),
+		config:             config,
+		mcpHandler:         mcpHandler,
+		clients:            make(map[string]oauthClient),
+		registrationTokens: make(map[string]string),
+		codes:              make(map[string]oauthCode),
+		access:             make(map[string]oauthGrant),
+		refresh:            make(map[string]oauthGrant),
+		usedCodes:          make(map[string]struct{}),
+		usedRefresh:        make(map[string]struct{}),
+		counters:           make(map[string]int),
 	}
 }
 
@@ -94,6 +96,7 @@ func (f *oauthFixtures) register(mux *http.ServeMux) {
 	mux.HandleFunc("/.well-known/oauth-authorization-server/fixtures/oauth", f.authorizationServerMetadata)
 	mux.HandleFunc(oauthFixturePrefix+"/.well-known/oauth-authorization-server", f.authorizationServerMetadata)
 	mux.HandleFunc(oauthFixturePrefix+"/register", f.registerClient)
+	mux.HandleFunc(oauthFixturePrefix+"/register/", f.manageClient)
 	mux.HandleFunc(oauthFixturePrefix+"/authorize", f.authorize)
 	mux.HandleFunc(oauthFixturePrefix+"/token", f.token)
 	mux.HandleFunc(oauthFixturePrefix+"/counters", f.serveCounters)
@@ -188,6 +191,7 @@ func (f *oauthFixtures) authorizationServerMetadata(w http.ResponseWriter, r *ht
 		"registration_endpoint":                          issuerEndpoint(issuer, "register"),
 		"response_types_supported":                       []string{"code"},
 		"grant_types_supported":                          []string{"authorization_code", "refresh_token"},
+		"scopes_supported":                               []string{"mcp"},
 		"code_challenge_methods_supported":               []string{"S256"},
 		"token_endpoint_auth_methods_supported":          []string{"none"},
 		"authorization_response_iss_parameter_supported": true,
@@ -225,15 +229,48 @@ func (f *oauthFixtures) registerClient(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.sequence++
 	clientID := fmt.Sprintf("fixture-client-%d", f.sequence)
+	registrationToken := fmt.Sprintf("fixture-registration-token-%d", f.sequence)
 	f.clients[clientID] = oauthClient{RedirectURIs: slices.Clone(request.RedirectURIs)}
+	f.registrationTokens[clientID] = registrationToken
 	f.mu.Unlock()
+	issuer, _, err := f.identities(r)
+	if err != nil {
+		writeOAuthError(w, http.StatusInternalServerError, "server_error")
+		return
+	}
 	writeOAuthJSON(w, http.StatusCreated, map[string]any{
 		"client_id":                  clientID,
 		"redirect_uris":              request.RedirectURIs,
 		"token_endpoint_auth_method": "none",
 		"grant_types":                []string{"authorization_code", "refresh_token"},
 		"response_types":             []string{"code"},
+		"registration_client_uri":    issuerEndpoint(issuer, "register/"+clientID),
+		"registration_access_token":  registrationToken,
 	})
+}
+
+func (f *oauthFixtures) manageClient(w http.ResponseWriter, r *http.Request) {
+	f.record(r, "registration_delete")
+	if r.Method != http.MethodDelete {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	clientID := strings.TrimPrefix(r.URL.Path, oauthFixturePrefix+"/register/")
+	if clientID == "" || strings.Contains(clientID, "/") {
+		writeOAuthError(w, http.StatusUnauthorized, "invalid_token")
+		return
+	}
+	f.mu.Lock()
+	token, ok := f.registrationTokens[clientID]
+	if !ok || r.Header.Get("Authorization") != "Bearer "+token {
+		f.mu.Unlock()
+		writeOAuthError(w, http.StatusUnauthorized, "invalid_token")
+		return
+	}
+	delete(f.registrationTokens, clientID)
+	delete(f.clients, clientID)
+	f.mu.Unlock()
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func decodeStrictJSONObject(body []byte, target any) error {
@@ -587,6 +624,7 @@ func (f *oauthFixtures) reset(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	f.sequence = 0
 	f.clients = make(map[string]oauthClient)
+	f.registrationTokens = make(map[string]string)
 	f.codes = make(map[string]oauthCode)
 	f.access = make(map[string]oauthGrant)
 	f.refresh = make(map[string]oauthGrant)
