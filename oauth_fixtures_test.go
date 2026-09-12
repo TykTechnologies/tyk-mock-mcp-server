@@ -355,6 +355,7 @@ func TestOAuthFixtureRejectsAmbiguousPublicInputs(t *testing.T) {
 	for _, body := range []string{
 		`{"redirect_uris":["https://client.example/callback"]}`,
 		`{"redirect_uris":["https://client.example/callback"],"token_endpoint_auth_method":"none"} {}`,
+		`{"redirect_uris":["https://attacker.example/callback"],"redirect_uris":["https://client.example/callback"],"token_endpoint_auth_method":"client_secret_basic","token_endpoint_auth_method":"none"}`,
 	} {
 		response, err := client.Post(server.URL+oauthFixturePrefix+"/register", "application/json", strings.NewReader(body))
 		if err != nil {
@@ -372,6 +373,13 @@ func TestOAuthFixtureRejectsAmbiguousPublicInputs(t *testing.T) {
 		response.Body.Close()
 		if response.StatusCode != http.StatusBadRequest {
 			t.Fatalf("ambiguous state %v accepted", states)
+		}
+	}
+	for _, scopes := range [][]string{{"admin"}, {"mcp", "admin"}, {""}} {
+		response := authorizeFixture(t, client, server.URL, clientID, redirectURI, url.Values{"scope": scopes})
+		response.Body.Close()
+		if response.StatusCode != http.StatusBadRequest || response.Header.Get("Location") != "" {
+			t.Fatalf("unsupported scope %v accepted", scopes)
 		}
 	}
 

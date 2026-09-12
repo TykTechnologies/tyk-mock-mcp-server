@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -208,13 +209,12 @@ func (f *oauthFixtures) registerClient(w http.ResponseWriter, r *http.Request) {
 		RedirectURIs            []string `json:"redirect_uris"`
 		TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
 	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
-	if err := decoder.Decode(&request); err != nil {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+	if err != nil || decodeStrictJSONObject(body, &request) != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_client_metadata")
 		return
 	}
-	var trailing any
-	if err := decoder.Decode(&trailing); err != io.EOF || request.TokenEndpointAuthMethod != "none" {
+	if request.TokenEndpointAuthMethod != "none" {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_client_metadata")
 		return
 	}
@@ -234,6 +234,41 @@ func (f *oauthFixtures) registerClient(w http.ResponseWriter, r *http.Request) {
 		"grant_types":                []string{"authorization_code", "refresh_token"},
 		"response_types":             []string{"code"},
 	})
+}
+
+func decodeStrictJSONObject(body []byte, target any) error {
+	decoder := json.NewDecoder(bytes.NewReader(body))
+	start, err := decoder.Token()
+	if err != nil || start != json.Delim('{') {
+		return fmt.Errorf("expected JSON object")
+	}
+	seen := make(map[string]struct{})
+	for decoder.More() {
+		key, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		name, ok := key.(string)
+		if !ok {
+			return fmt.Errorf("invalid JSON object key")
+		}
+		if _, duplicate := seen[name]; duplicate {
+			return fmt.Errorf("duplicate JSON object key %q", name)
+		}
+		seen[name] = struct{}{}
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return err
+		}
+	}
+	if _, err := decoder.Token(); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return fmt.Errorf("trailing JSON value")
+	}
+	return json.Unmarshal(body, target)
 }
 
 func validRedirectURIs(values []string) bool {
@@ -283,6 +318,10 @@ func (f *oauthFixtures) authorize(w http.ResponseWriter, r *http.Request) {
 	}
 	if !singleValue(query, "state") || query.Get("state") == "" {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	if !singleValue(query, "scope") || query.Get("scope") != "mcp" {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_scope")
 		return
 	}
 	if !singleValue(query, "resource") || query.Get("resource") != resource {
