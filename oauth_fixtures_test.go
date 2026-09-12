@@ -358,6 +358,9 @@ func TestOAuthFixtureRejectsAmbiguousPublicInputs(t *testing.T) {
 		`{"redirect_uris":["https://attacker.example/callback"],"redirect_uris":["https://client.example/callback"],"token_endpoint_auth_method":"client_secret_basic","token_endpoint_auth_method":"none"}`,
 		`{"redirect_uris":["https://attacker.example/callback"],"Redirect_URIs":["https://client.example/callback"],"token_endpoint_auth_method":"client_secret_basic","Token_Endpoint_Auth_Method":"none"}`,
 		`{"redirect_uris":["https://attacker.example/callback"],"redirect_uriſ":["https://client.example/callback"],"token_endpoint_auth_method":"none"}`,
+		`{"Redirect_URIs":["https://client.example/callback"],"Token_Endpoint_Auth_Method":"none"}`,
+		`{"redirect_uriſ":["https://client.example/callback"],"token_endpoint_auth_method":"none"}`,
+		`{"redirect_uris":["https://client.example/callback"],"token_endpoint_auth_method":"none","vendor_extension":"` + strings.Repeat("a", 70<<10) + `"}`,
 	} {
 		response, err := client.Post(server.URL+oauthFixturePrefix+"/register", "application/json", strings.NewReader(body))
 		if err != nil {

@@ -259,6 +259,9 @@ func decodeStrictJSONObject(body []byte, target any) error {
 		seenExact[name] = struct{}{}
 		for _, securityField := range []string{"redirect_uris", "token_endpoint_auth_method"} {
 			if strings.EqualFold(name, securityField) {
+				if name != securityField {
+					return fmt.Errorf("noncanonical JSON security field %q", name)
+				}
 				if _, duplicate := seenSecurity[securityField]; duplicate {
 					return fmt.Errorf("duplicate JSON security field %q", securityField)
 				}
