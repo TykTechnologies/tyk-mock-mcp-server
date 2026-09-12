@@ -23,7 +23,7 @@ type oauthFixtureConfig struct {
 
 func oauthFixtureConfigFromEnv() oauthFixtureConfig {
 	return oauthFixtureConfig{
-		Issuer:   strings.TrimSuffix(os.Getenv("OAUTH_FIXTURE_ISSUER"), "/"),
+		Issuer:   os.Getenv("OAUTH_FIXTURE_ISSUER"),
 		Resource: os.Getenv("OAUTH_FIXTURE_RESOURCE"),
 	}
 }
@@ -101,7 +101,7 @@ func (f *oauthFixtures) register(mux *http.ServeMux) {
 	mux.Handle(oauthFixturePrefix+"/mcp", f.requireAccessToken(f.mcpHandler))
 }
 
-func (f *oauthFixtures) identities(r *http.Request) (issuer, resource string) {
+func (f *oauthFixtures) identities(r *http.Request) (issuer, resource string, err error) {
 	issuer, resource = f.config.Issuer, f.config.Resource
 	if issuer == "" || resource == "" {
 		scheme := "http"
@@ -116,7 +116,20 @@ func (f *oauthFixtures) identities(r *http.Request) (issuer, resource string) {
 			resource = base + oauthFixturePrefix + "/mcp"
 		}
 	}
-	return issuer, resource
+	if !validOAuthIdentity(issuer) || !validOAuthIdentity(resource) {
+		return "", "", fmt.Errorf("invalid OAuth fixture identity")
+	}
+	return issuer, resource, nil
+}
+
+func validOAuthIdentity(value string) bool {
+	u, err := url.Parse(value)
+	return err == nil && u.IsAbs() && (u.Scheme == "https" || u.Scheme == "http") &&
+		u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == ""
+}
+
+func issuerEndpoint(issuer, endpoint string) string {
+	return strings.TrimSuffix(issuer, "/") + "/" + endpoint
 }
 
 func (f *oauthFixtures) record(r *http.Request, endpoint string) {
@@ -139,7 +152,11 @@ func (f *oauthFixtures) protectedResourceMetadata(w http.ResponseWriter, r *http
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	issuer, resource := f.identities(r)
+	issuer, resource, err := f.identities(r)
+	if err != nil {
+		writeOAuthError(w, http.StatusInternalServerError, "server_error")
+		return
+	}
 	writeOAuthJSON(w, http.StatusOK, map[string]any{
 		"resource":              resource,
 		"authorization_servers": []string{issuer},
@@ -154,16 +171,20 @@ func (f *oauthFixtures) authorizationServerMetadata(w http.ResponseWriter, r *ht
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	issuer, _ := f.identities(r)
+	issuer, _, err := f.identities(r)
+	if err != nil {
+		writeOAuthError(w, http.StatusInternalServerError, "server_error")
+		return
+	}
 	metadataIssuer := issuer
 	if r.URL.Query().Get("issuer") == "wrong" {
 		metadataIssuer = issuer + "/wrong"
 	}
 	result := map[string]any{
 		"issuer":                                         metadataIssuer,
-		"authorization_endpoint":                         issuer + "/authorize",
-		"token_endpoint":                                 issuer + "/token",
-		"registration_endpoint":                          issuer + "/register",
+		"authorization_endpoint":                         issuerEndpoint(issuer, "authorize"),
+		"token_endpoint":                                 issuerEndpoint(issuer, "token"),
+		"registration_endpoint":                          issuerEndpoint(issuer, "register"),
 		"response_types_supported":                       []string{"code"},
 		"grant_types_supported":                          []string{"authorization_code", "refresh_token"},
 		"code_challenge_methods_supported":               []string{"S256"},
@@ -187,11 +208,13 @@ func (f *oauthFixtures) registerClient(w http.ResponseWriter, r *http.Request) {
 		RedirectURIs            []string `json:"redirect_uris"`
 		TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
 	}
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10)).Decode(&request); err != nil {
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	if err := decoder.Decode(&request); err != nil {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_client_metadata")
 		return
 	}
-	if request.TokenEndpointAuthMethod != "" && request.TokenEndpointAuthMethod != "none" {
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF || request.TokenEndpointAuthMethod != "none" {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_client_metadata")
 		return
 	}
@@ -240,7 +263,11 @@ func (f *oauthFixtures) authorize(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
-	issuer, resource := f.identities(r)
+	issuer, resource, err := f.identities(r)
+	if err != nil {
+		writeOAuthError(w, http.StatusInternalServerError, "server_error")
+		return
+	}
 	query := r.URL.Query()
 	clientID, redirectURI := query.Get("client_id"), query.Get("redirect_uri")
 	f.mu.Lock()
@@ -254,6 +281,10 @@ func (f *oauthFixtures) authorize(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
+	if !singleValue(query, "state") || query.Get("state") == "" {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
 	if !singleValue(query, "resource") || query.Get("resource") != resource {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_target")
 		return
@@ -264,6 +295,9 @@ func (f *oauthFixtures) authorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	params := callback.Query()
+	for _, reserved := range []string{"code", "error", "error_description", "error_uri", "state", "iss"} {
+		params.Del(reserved)
+	}
 	if state, present := query["state"]; present {
 		switch query.Get("fixture_state") {
 		case "missing":
@@ -328,6 +362,12 @@ func (f *oauthFixtures) token(w http.ResponseWriter, r *http.Request) {
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, 64<<10)
 	if err := r.ParseForm(); err != nil {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_request")
+		return
+	}
+	if r.Header.Get("Authorization") != "" || len(r.Form["client_secret"]) != 0 ||
+		!singleValue(r.Form, "grant_type") || !singleValue(r.Form, "client_id") ||
+		r.Form.Get("client_id") == "" {
 		writeOAuthError(w, http.StatusBadRequest, "invalid_request")
 		return
 	}
@@ -429,7 +469,11 @@ func (f *oauthFixtures) requireAccessToken(next http.Handler) http.Handler {
 			return
 		}
 		tokenValue := strings.TrimPrefix(authorization, prefix)
-		_, resource := f.identities(r)
+		_, resource, err := f.identities(r)
+		if err != nil {
+			writeOAuthError(w, http.StatusInternalServerError, "server_error")
+			return
+		}
 		f.mu.Lock()
 		grant, ok := f.access[tokenValue]
 		f.mu.Unlock()

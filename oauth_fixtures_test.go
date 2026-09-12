@@ -182,6 +182,39 @@ func TestOAuthFixtureDiscoveryCaptureAndTLSConfiguration(t *testing.T) {
 	}
 }
 
+func TestOAuthFixtureConfiguredIssuerIsExactAndInvalidIdentityFailsClosed(t *testing.T) {
+	t.Setenv("OAUTH_FIXTURE_ISSUER", "https://issuer.example/as/")
+	t.Setenv("OAUTH_FIXTURE_RESOURCE", "https://resource.example/mcp")
+	config := oauthFixtureConfigFromEnv()
+	if config.Issuer != "https://issuer.example/as/" {
+		t.Fatalf("configured issuer normalized: %q", config.Issuer)
+	}
+	fixture := newOAuthFixtures(http.NotFoundHandler(), config)
+	mux := http.NewServeMux()
+	fixture.register(mux)
+	request := httptest.NewRequest(http.MethodGet, "/.well-known/oauth-authorization-server/fixtures/oauth", nil)
+	recorder := httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	var metadata map[string]any
+	if err := json.NewDecoder(recorder.Body).Decode(&metadata); err != nil {
+		t.Fatal(err)
+	}
+	if metadata["issuer"] != config.Issuer || metadata["authorization_endpoint"] != "https://issuer.example/as/authorize" {
+		t.Fatalf("metadata=%v", metadata)
+	}
+
+	invalid := newOAuthFixtures(http.NotFoundHandler(), oauthFixtureConfig{
+		Issuer: "https://issuer.example/as?ambiguous=yes", Resource: config.Resource,
+	})
+	mux = http.NewServeMux()
+	invalid.register(mux)
+	recorder = httptest.NewRecorder()
+	mux.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("invalid configured identity status=%d", recorder.Code)
+	}
+}
+
 func TestOAuthFixtureStrictAuthorizationCodeAndRefresh(t *testing.T) {
 	_, server, client := newOAuthFixtureServer(t)
 	redirectURI := "https://client.example/callback?existing=kept"
@@ -312,6 +345,90 @@ func TestOAuthFixtureStrictAuthorizationCodeAndRefresh(t *testing.T) {
 	response, payload = refresh(refreshToken, server.URL+oauthFixturePrefix+"/mcp")
 	if response.StatusCode != http.StatusBadRequest || payload["error"] != "invalid_grant" {
 		t.Fatalf("refresh replay status=%d payload=%v", response.StatusCode, payload)
+	}
+}
+
+func TestOAuthFixtureRejectsAmbiguousPublicInputs(t *testing.T) {
+	_, server, client := newOAuthFixtureServer(t)
+	redirectURI := "https://client.example/callback?kept=yes&code=attacker&error=attacker"
+
+	for _, body := range []string{
+		`{"redirect_uris":["https://client.example/callback"]}`,
+		`{"redirect_uris":["https://client.example/callback"],"token_endpoint_auth_method":"none"} {}`,
+	} {
+		response, err := client.Post(server.URL+oauthFixturePrefix+"/register", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusBadRequest {
+			t.Fatalf("non-strict DCR accepted body %q: status=%d", body, response.StatusCode)
+		}
+	}
+
+	clientID := registerFixtureClient(t, client, server.URL, []string{redirectURI})
+	for _, states := range [][]string{nil, {"one", "two"}, {""}} {
+		response := authorizeFixture(t, client, server.URL, clientID, redirectURI, url.Values{"state": states})
+		response.Body.Close()
+		if response.StatusCode != http.StatusBadRequest {
+			t.Fatalf("ambiguous state %v accepted", states)
+		}
+	}
+
+	for _, extra := range []url.Values{nil, {"fixture_decision": {"deny"}}} {
+		response := authorizeFixture(t, client, server.URL, clientID, redirectURI, extra)
+		response.Body.Close()
+		location, err := url.Parse(response.Header.Get("Location"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		query := location.Query()
+		if len(query["code"]) > 0 && len(query["error"]) > 0 {
+			t.Fatalf("reserved callback ambiguity: %v", query)
+		}
+		if query.Get("kept") != "yes" {
+			t.Fatalf("non-reserved callback query lost: %v", query)
+		}
+	}
+
+	for _, test := range []struct {
+		name      string
+		mutate    func(url.Values)
+		basicAuth bool
+	}{
+		{name: "duplicate grant type", mutate: func(values url.Values) {
+			values["grant_type"] = []string{"authorization_code", "refresh_token"}
+		}},
+		{name: "client secret form", mutate: func(values url.Values) { values.Set("client_secret", "secret") }},
+		{name: "basic authorization", mutate: func(url.Values) {}, basicAuth: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			authorization := authorizeFixture(t, client, server.URL, clientID, redirectURI, nil)
+			location, _ := url.Parse(authorization.Header.Get("Location"))
+			authorization.Body.Close()
+			values := url.Values{
+				"grant_type": {"authorization_code"}, "client_id": {clientID}, "redirect_uri": {redirectURI},
+				"code": {location.Query().Get("code")}, "code_verifier": {fixtureVerifier},
+				"resource": {server.URL + oauthFixturePrefix + "/mcp"},
+			}
+			test.mutate(values)
+			request, err := http.NewRequest(http.MethodPost, server.URL+oauthFixturePrefix+"/token", strings.NewReader(values.Encode()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			if test.basicAuth {
+				request.SetBasicAuth("client", "secret")
+			}
+			response, err := client.Do(request)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+			if response.StatusCode != http.StatusBadRequest {
+				t.Fatalf("ambiguous/authenticated token request accepted: status=%d", response.StatusCode)
+			}
+		})
 	}
 }
 
