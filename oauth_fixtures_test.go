@@ -356,6 +356,7 @@ func TestOAuthFixtureRejectsAmbiguousPublicInputs(t *testing.T) {
 		`{"redirect_uris":["https://client.example/callback"]}`,
 		`{"redirect_uris":["https://client.example/callback"],"token_endpoint_auth_method":"none"} {}`,
 		`{"redirect_uris":["https://attacker.example/callback"],"redirect_uris":["https://client.example/callback"],"token_endpoint_auth_method":"client_secret_basic","token_endpoint_auth_method":"none"}`,
+		`{"redirect_uris":["https://attacker.example/callback"],"Redirect_URIs":["https://client.example/callback"],"token_endpoint_auth_method":"client_secret_basic","Token_Endpoint_Auth_Method":"none"}`,
 	} {
 		response, err := client.Post(server.URL+oauthFixturePrefix+"/register", "application/json", strings.NewReader(body))
 		if err != nil {
@@ -380,6 +381,32 @@ func TestOAuthFixtureRejectsAmbiguousPublicInputs(t *testing.T) {
 		response.Body.Close()
 		if response.StatusCode != http.StatusBadRequest || response.Header.Get("Location") != "" {
 			t.Fatalf("unsupported scope %v accepted", scopes)
+		}
+	}
+	baseQuery := url.Values{
+		"response_type": {"code"}, "client_id": {clientID}, "redirect_uri": {redirectURI},
+		"state": {"state-exact"}, "code_challenge": {pkceChallenge(fixtureVerifier)},
+		"code_challenge_method": {"S256"}, "resource": {server.URL + oauthFixturePrefix + "/mcp"},
+		"scope": {"mcp"},
+	}.Encode()
+	for _, test := range []struct {
+		rawScope string
+		status   int
+	}{
+		{rawScope: "m%63p", status: http.StatusFound},
+		{rawScope: "%20mcp", status: http.StatusBadRequest},
+		{rawScope: "mcp+", status: http.StatusBadRequest},
+		{rawScope: "m%2563p", status: http.StatusBadRequest},
+		{rawScope: "MCP", status: http.StatusBadRequest},
+		{rawScope: "mcp&scope=mcp", status: http.StatusBadRequest},
+	} {
+		response, err := client.Get(server.URL + oauthFixturePrefix + "/authorize?" + strings.Replace(baseQuery, "scope=mcp", "scope="+test.rawScope, 1))
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != test.status {
+			t.Fatalf("raw scope %q status=%d want=%d", test.rawScope, response.StatusCode, test.status)
 		}
 	}
 

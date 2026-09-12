@@ -252,10 +252,11 @@ func decodeStrictJSONObject(body []byte, target any) error {
 		if !ok {
 			return fmt.Errorf("invalid JSON object key")
 		}
-		if _, duplicate := seen[name]; duplicate {
+		matchName := strings.ToLower(name)
+		if _, duplicate := seen[matchName]; duplicate {
 			return fmt.Errorf("duplicate JSON object key %q", name)
 		}
-		seen[name] = struct{}{}
+		seen[matchName] = struct{}{}
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
 			return err
