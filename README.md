@@ -172,6 +172,9 @@ PORT=3000 ./tyk-mock-mcp-server
 - MCP: `http://localhost:7878/mcp`
 - SSE stream: `http://localhost:7878/sse/stream`
 - SSE crash: `http://localhost:7878/sse/crash`
+- OAuth-protected MCP: `http://localhost:7878/fixtures/oauth/mcp`
+- OAuth registration/authorization/token: `/fixtures/oauth/register`, `/fixtures/oauth/authorize`, `/fixtures/oauth/token`
+- OAuth request evidence: `/fixtures/oauth/counters`, `/fixtures/oauth/captures` (reset with `DELETE /fixtures/oauth/reset`)
 - Health: `http://localhost:7878/health`
 
 ### Configuration
@@ -188,6 +191,17 @@ Configure the server using environment variables:
 | `MCP_OAS_UPSTREAM_HOST` | `Host` header to send (e.g. a custom domain); empty leaves it as-is | _empty_ |
 | `MCP_OAS_FORWARD_AUTH` | Replay the inbound `Authorization` bearer on the upstream call | `true` |
 | `MCP_OAS_FORWARD_TRACE` | Forward the inbound W3C trace context (`traceparent`/`tracestate`) | `true` |
+| `OAUTH_FIXTURE_ISSUER` | Exact issuer returned by the deterministic OAuth fixture | request origin + `/fixtures/oauth` |
+| `OAUTH_FIXTURE_RESOURCE` | Exact audience required by authorize/token and fixture bearer tokens | request origin + `/fixtures/oauth/mcp` |
+
+The OAuth fixture accepts public clients with exact registered HTTP(S) redirect
+URIs and requires authorization code with S256 plus an exact resource. Use
+`fixture_decision=deny` for an authorization denial. The `fixture_iss` and
+`fixture_state` controls accept `missing`, `wrong`, or `duplicate` for strict
+callback parsing cases. Authorization-server metadata accepts `issuer=wrong`
+and `iss_support=missing`. Access codes and refresh tokens are one-use; refresh
+succeeds by rotating both tokens. Capture output records whether authorization
+was present but never stores bearer values.
 
 ### OpenAPI-driven tools
 
