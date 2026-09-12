@@ -242,7 +242,8 @@ func decodeStrictJSONObject(body []byte, target any) error {
 	if err != nil || start != json.Delim('{') {
 		return fmt.Errorf("expected JSON object")
 	}
-	seen := make(map[string]struct{})
+	seenExact := make(map[string]struct{})
+	seenSecurity := make(map[string]struct{})
 	for decoder.More() {
 		key, err := decoder.Token()
 		if err != nil {
@@ -252,11 +253,19 @@ func decodeStrictJSONObject(body []byte, target any) error {
 		if !ok {
 			return fmt.Errorf("invalid JSON object key")
 		}
-		matchName := strings.ToLower(name)
-		if _, duplicate := seen[matchName]; duplicate {
+		if _, duplicate := seenExact[name]; duplicate {
 			return fmt.Errorf("duplicate JSON object key %q", name)
 		}
-		seen[matchName] = struct{}{}
+		seenExact[name] = struct{}{}
+		for _, securityField := range []string{"redirect_uris", "token_endpoint_auth_method"} {
+			if strings.EqualFold(name, securityField) {
+				if _, duplicate := seenSecurity[securityField]; duplicate {
+					return fmt.Errorf("duplicate JSON security field %q", securityField)
+				}
+				seenSecurity[securityField] = struct{}{}
+				break
+			}
+		}
 		var value json.RawMessage
 		if err := decoder.Decode(&value); err != nil {
 			return err

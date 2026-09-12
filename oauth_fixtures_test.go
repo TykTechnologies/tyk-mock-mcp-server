@@ -357,6 +357,7 @@ func TestOAuthFixtureRejectsAmbiguousPublicInputs(t *testing.T) {
 		`{"redirect_uris":["https://client.example/callback"],"token_endpoint_auth_method":"none"} {}`,
 		`{"redirect_uris":["https://attacker.example/callback"],"redirect_uris":["https://client.example/callback"],"token_endpoint_auth_method":"client_secret_basic","token_endpoint_auth_method":"none"}`,
 		`{"redirect_uris":["https://attacker.example/callback"],"Redirect_URIs":["https://client.example/callback"],"token_endpoint_auth_method":"client_secret_basic","Token_Endpoint_Auth_Method":"none"}`,
+		`{"redirect_uris":["https://attacker.example/callback"],"redirect_uriſ":["https://client.example/callback"],"token_endpoint_auth_method":"none"}`,
 	} {
 		response, err := client.Post(server.URL+oauthFixturePrefix+"/register", "application/json", strings.NewReader(body))
 		if err != nil {
@@ -366,6 +367,16 @@ func TestOAuthFixtureRejectsAmbiguousPublicInputs(t *testing.T) {
 		if response.StatusCode != http.StatusBadRequest {
 			t.Fatalf("non-strict DCR accepted body %q: status=%d", body, response.StatusCode)
 		}
+	}
+	response, err := client.Post(server.URL+oauthFixturePrefix+"/register", "application/json", strings.NewReader(
+		`{"redirect_uris":["https://client.example/callback"],"token_endpoint_auth_method":"none","vendor_extension":{"a":1},"Vendor_Extension":{"b":2}}`,
+	))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusCreated {
+		t.Fatalf("case-distinct unknown extensions rejected: status=%d", response.StatusCode)
 	}
 
 	clientID := registerFixtureClient(t, client, server.URL, []string{redirectURI})
