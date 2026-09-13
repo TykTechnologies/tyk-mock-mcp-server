@@ -250,8 +250,13 @@ func (f *oauthFixtures) registerClient(w http.ResponseWriter, r *http.Request) {
 }
 
 func (f *oauthFixtures) manageClient(w http.ResponseWriter, r *http.Request) {
-	f.record(r, "registration_delete")
-	if r.Method != http.MethodDelete {
+	switch r.Method {
+	case http.MethodPut:
+		f.record(r, "registration_update")
+	case http.MethodDelete:
+		f.record(r, "registration_delete")
+	default:
+		f.record(r, "registration_management")
 		w.WriteHeader(http.StatusMethodNotAllowed)
 		return
 	}
@@ -267,10 +272,58 @@ func (f *oauthFixtures) manageClient(w http.ResponseWriter, r *http.Request) {
 		writeOAuthError(w, http.StatusUnauthorized, "invalid_token")
 		return
 	}
+	if r.Method == http.MethodPut {
+		f.mu.Unlock()
+		f.updateClient(w, r, clientID, token)
+		return
+	}
 	delete(f.registrationTokens, clientID)
 	delete(f.clients, clientID)
 	f.mu.Unlock()
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (f *oauthFixtures) updateClient(w http.ResponseWriter, r *http.Request, clientID, currentToken string) {
+	var request struct {
+		ClientID                string   `json:"client_id"`
+		RedirectURIs            []string `json:"redirect_uris"`
+		TokenEndpointAuthMethod string   `json:"token_endpoint_auth_method"`
+		GrantTypes              []string `json:"grant_types"`
+		ResponseTypes           []string `json:"response_types"`
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 64<<10))
+	if err != nil || decodeStrictJSONObject(body, &request) != nil ||
+		request.ClientID != clientID || request.TokenEndpointAuthMethod != "none" ||
+		!slices.Equal(request.GrantTypes, []string{"authorization_code", "refresh_token"}) ||
+		!slices.Equal(request.ResponseTypes, []string{"code"}) || !validRedirectURIs(request.RedirectURIs) {
+		writeOAuthError(w, http.StatusBadRequest, "invalid_client_metadata")
+		return
+	}
+	issuer, _, err := f.identities(r)
+	if err != nil {
+		writeOAuthError(w, http.StatusInternalServerError, "server_error")
+		return
+	}
+	f.mu.Lock()
+	if token, ok := f.registrationTokens[clientID]; !ok || token != currentToken {
+		f.mu.Unlock()
+		writeOAuthError(w, http.StatusUnauthorized, "invalid_token")
+		return
+	}
+	f.sequence++
+	rotatedToken := fmt.Sprintf("fixture-registration-token-%d", f.sequence)
+	f.clients[clientID] = oauthClient{RedirectURIs: slices.Clone(request.RedirectURIs)}
+	f.registrationTokens[clientID] = rotatedToken
+	f.mu.Unlock()
+	writeOAuthJSON(w, http.StatusOK, map[string]any{
+		"client_id":                  clientID,
+		"redirect_uris":              request.RedirectURIs,
+		"token_endpoint_auth_method": "none",
+		"grant_types":                []string{"authorization_code", "refresh_token"},
+		"response_types":             []string{"code"},
+		"registration_client_uri":    issuerEndpoint(issuer, "register/"+clientID),
+		"registration_access_token":  rotatedToken,
+	})
 }
 
 func decodeStrictJSONObject(body []byte, target any) error {

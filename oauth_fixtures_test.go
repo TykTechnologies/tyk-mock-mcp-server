@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -112,6 +113,96 @@ func TestOAuthFixtureAuthenticatedRegistrationDelete(t *testing.T) {
 	response.Body.Close()
 	if response.StatusCode != http.StatusBadRequest {
 		t.Fatalf("deleted client authorize status=%d", response.StatusCode)
+	}
+}
+
+func TestOAuthFixtureAuthenticatedRegistrationUpdateRotatesCredential(t *testing.T) {
+	_, server, client := newOAuthFixtureServer(t)
+	oldRedirect := "https://client.example/old-callback"
+	registrationBody := `{"redirect_uris":["` + oldRedirect + `"],"token_endpoint_auth_method":"none"}`
+	response, err := client.Post(server.URL+oauthFixturePrefix+"/register", "application/json", strings.NewReader(registrationBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var registration struct {
+		ClientID                string `json:"client_id"`
+		RegistrationClientURI   string `json:"registration_client_uri"`
+		RegistrationAccessToken string `json:"registration_access_token"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&registration); err != nil {
+		response.Body.Close()
+		t.Fatal(err)
+	}
+	response.Body.Close()
+
+	newRedirect := "https://client.example/new-callback"
+	updateBody := fmt.Sprintf(`{"client_id":%q,"redirect_uris":[%q],"token_endpoint_auth_method":"none","grant_types":["authorization_code","refresh_token"],"response_types":["code"]}`,
+		registration.ClientID, newRedirect)
+	updateRequest, err := http.NewRequest(http.MethodPut, registration.RegistrationClientURI, strings.NewReader(updateBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	updateRequest.Header.Set("Authorization", "Bearer "+registration.RegistrationAccessToken)
+	updateRequest.Header.Set("Content-Type", "application/json")
+	response, err = client.Do(updateRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rotated struct {
+		ClientID                string   `json:"client_id"`
+		RedirectURIs            []string `json:"redirect_uris"`
+		RegistrationClientURI   string   `json:"registration_client_uri"`
+		RegistrationAccessToken string   `json:"registration_access_token"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&rotated); err != nil {
+		response.Body.Close()
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK || rotated.ClientID != registration.ClientID ||
+		rotated.RegistrationClientURI != registration.RegistrationClientURI ||
+		rotated.RegistrationAccessToken == "" || rotated.RegistrationAccessToken == registration.RegistrationAccessToken ||
+		!slices.Equal(rotated.RedirectURIs, []string{newRedirect}) {
+		t.Fatalf("registration update status=%d body=%+v", response.StatusCode, rotated)
+	}
+
+	oldDelete, err := http.NewRequest(http.MethodDelete, registration.RegistrationClientURI, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldDelete.Header.Set("Authorization", "Bearer "+registration.RegistrationAccessToken)
+	response, err = client.Do(oldDelete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("old management token status=%d", response.StatusCode)
+	}
+
+	response = authorizeFixture(t, client, server.URL, registration.ClientID, oldRedirect, nil)
+	response.Body.Close()
+	if response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("old redirect authorize status=%d", response.StatusCode)
+	}
+	response = authorizeFixture(t, client, server.URL, registration.ClientID, newRedirect, nil)
+	response.Body.Close()
+	if response.StatusCode != http.StatusFound {
+		t.Fatalf("new redirect authorize status=%d", response.StatusCode)
+	}
+
+	newDelete, err := http.NewRequest(http.MethodDelete, registration.RegistrationClientURI, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newDelete.Header.Set("Authorization", "Bearer "+rotated.RegistrationAccessToken)
+	response, err = client.Do(newDelete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusNoContent {
+		t.Fatalf("rotated management token delete status=%d", response.StatusCode)
 	}
 }
 
