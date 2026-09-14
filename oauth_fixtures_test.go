@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const fixtureVerifier = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"
@@ -851,4 +853,139 @@ func TestOAuthFixtureAtomicCodeAndRefreshConsumption(t *testing.T) {
 	if winners != 1 {
 		t.Fatalf("refresh winners=%d", winners)
 	}
+}
+
+func TestOAuthFixtureRefreshControlsAndSafeCounters(t *testing.T) {
+	_, server, client := newOAuthFixtureServer(t)
+	redirectURI := "https://client.example/controlled-callback"
+	clientID := registerFixtureClient(t, client, server.URL, []string{redirectURI})
+	authorization := authorizeFixture(t, client, server.URL, clientID, redirectURI, nil)
+	location, _ := url.Parse(authorization.Header.Get("Location"))
+	authorization.Body.Close()
+	response, tokens := exchangeFixtureCode(t, client, server.URL, clientID, redirectURI, location.Query().Get("code"), nil)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("authorization exchange status=%d", response.StatusCode)
+	}
+	accessToken := tokens["access_token"].(string)
+	refreshToken := tokens["refresh_token"].(string)
+
+	setControl := func(mode oauthRefreshMode, delayMS int) {
+		body, _ := json.Marshal(oauthRefreshControl{Mode: mode, DelayMS: delayMS})
+		request, err := http.NewRequest(http.MethodPut, server.URL+oauthControlPrefix+"/refresh", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		response, err := client.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("set control %s status=%d", mode, response.StatusCode)
+		}
+	}
+	refresh := func(ctx context.Context, token string) (*http.Response, []byte, error) {
+		form := url.Values{
+			"grant_type": {"refresh_token"}, "client_id": {clientID},
+			"refresh_token": {token}, "resource": {server.URL + oauthFixturePrefix + "/mcp"},
+		}
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, server.URL+oauthFixturePrefix+"/token", strings.NewReader(form.Encode()))
+		if err != nil {
+			return nil, nil, err
+		}
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		response, err := client.Do(request)
+		if err != nil {
+			return nil, nil, err
+		}
+		body, readErr := io.ReadAll(response.Body)
+		response.Body.Close()
+		return response, body, readErr
+	}
+	var err error
+
+	for _, testCase := range []struct {
+		mode   oauthRefreshMode
+		status int
+	}{
+		{mode: oauthRefreshRateLimit, status: http.StatusTooManyRequests},
+		{mode: oauthRefreshServerError, status: http.StatusServiceUnavailable},
+		{mode: oauthRefreshMalformedSuccess, status: http.StatusOK},
+	} {
+		setControl(testCase.mode, 0)
+		response, _, err := refresh(context.Background(), refreshToken)
+		if err != nil || response.StatusCode != testCase.status {
+			t.Fatalf("mode=%s status=%v err=%v", testCase.mode, responseStatus(response), err)
+		}
+	}
+
+	setControl(oauthRefreshDelay, 30)
+	started := time.Now()
+	response, _, err = refresh(context.Background(), refreshToken)
+	if err != nil || response.StatusCode != http.StatusOK || time.Since(started) < 25*time.Millisecond {
+		t.Fatalf("delayed success status=%v elapsed=%s err=%v", responseStatus(response), time.Since(started), err)
+	}
+	setControl(oauthRefreshSuccess, 0)
+
+	// A timeout blocks until the caller cancels and leaves the current grant
+	// untouched. Use a fresh grant because the delayed request above rotated.
+	authorization = authorizeFixture(t, client, server.URL, clientID, redirectURI, nil)
+	location, _ = url.Parse(authorization.Header.Get("Location"))
+	authorization.Body.Close()
+	response, tokens = exchangeFixtureCode(t, client, server.URL, clientID, redirectURI, location.Query().Get("code"), nil)
+	refreshToken = tokens["refresh_token"].(string)
+	setControl(oauthRefreshTimeout, 0)
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	_, _, err = refresh(ctx, refreshToken)
+	cancel()
+	if err == nil {
+		t.Fatal("timeout control returned before caller cancellation")
+	}
+
+	setControl(oauthRefreshSuccess, 0)
+	response, body, err := refresh(context.Background(), refreshToken)
+	if err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("post-timeout rotation status=%v err=%v", responseStatus(response), err)
+	}
+	var rotated map[string]any
+	if err := json.Unmarshal(body, &rotated); err != nil {
+		t.Fatal(err)
+	}
+	rotatedRefresh := rotated["refresh_token"].(string)
+	setControl(oauthRefreshInvalidGrant, 0)
+	response, _, err = refresh(context.Background(), rotatedRefresh)
+	if err != nil || response.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid_grant status=%v err=%v", responseStatus(response), err)
+	}
+
+	response, err = client.Get(server.URL + oauthControlPrefix + "/refresh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidence, err := io.ReadAll(response.Body)
+	response.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{accessToken, refreshToken, rotatedRefresh} {
+		if secret != "" && bytes.Contains(evidence, []byte(secret)) {
+			t.Fatalf("control evidence leaked a token value")
+		}
+	}
+	for _, counter := range []string{
+		"refresh_attempts", "refresh_rate_limited", "refresh_server_errors", "refresh_malformed_successes",
+		"refresh_delays", "refresh_timeouts", "refresh_successes", "refresh_invalid_grants",
+	} {
+		if !bytes.Contains(evidence, []byte(`"`+counter+`"`)) {
+			t.Fatalf("missing %s in control evidence: %s", counter, evidence)
+		}
+	}
+}
+
+func responseStatus(response *http.Response) int {
+	if response == nil {
+		return 0
+	}
+	return response.StatusCode
 }
