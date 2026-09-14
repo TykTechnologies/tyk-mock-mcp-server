@@ -643,11 +643,13 @@ func startHTTPServer(mcpServer *mcp.Server, port string) *http.Server {
 	mux := http.NewServeMux()
 
 	handler := newProtocolSwitchHandler(mcpServer)
+	oauthFixtures := newOAuthFixtures(handler, oauthFixtureConfigFromEnv())
 
 	// Wrap handler with middleware (order matters: logging -> CORS -> capture -> handler)
 	wrappedHandler := loggingMiddleware(corsMiddleware(captureRequestMiddleware(handler)))
 
 	mux.Handle("/mcp", wrappedHandler)
+	oauthFixtures.register(mux)
 	fixtures := newCacheFixtures()
 	mux.Handle("/fixtures/mcp", fixtures)
 	mux.HandleFunc("/fixtures/counters", fixtures.counters)
