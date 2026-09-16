@@ -8,6 +8,8 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
 )
 
+replace github.com/modelcontextprotocol/go-sdk => github.com/andrei-tyk/go-sdk v1.7.1-0.20260912064918-3c4261d970be
+
 require (
 	github.com/go-openapi/jsonpointer v0.21.0 // indirect
 	github.com/go-openapi/swag v0.23.0 // indirect

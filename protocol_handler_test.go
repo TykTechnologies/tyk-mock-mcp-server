@@ -67,6 +67,58 @@ func TestProtocolSwitchHandler_SelectsOnlyMatchingModernDeclarations(t *testing.
 	}
 }
 
+func TestProtocolSwitchHandler_PreservesLargeNumericID(t *testing.T) {
+	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+	httpServer := httptest.NewServer(newProtocolSwitchHandler(server))
+	defer httpServer.Close()
+
+	const requestID = "9007199254740993"
+	body := `{"jsonrpc":"2.0","id":` + requestID + `,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"test","version":"1"},"io.modelcontextprotocol/clientCapabilities":{}}}}`
+	req, err := http.NewRequest(http.MethodPost, httpServer.URL, strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json, text/event-stream")
+	req.Header.Set("Mcp-Protocol-Version", modernProtocolVersion)
+	req.Header.Set("Mcp-Method", "server/discover")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status=%d body=%s", resp.StatusCode, raw)
+	}
+	if strings.HasPrefix(resp.Header.Get("Content-Type"), "text/event-stream") {
+		for _, line := range strings.Split(string(raw), "\n") {
+			if strings.HasPrefix(line, "data:") {
+				raw = []byte(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+				break
+			}
+		}
+	}
+
+	var envelope struct {
+		ID    json.RawMessage `json:"id"`
+		Error json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		t.Fatalf("decode response %s: %v", raw, err)
+	}
+	if len(envelope.Error) != 0 {
+		t.Fatalf("unexpected JSON-RPC error: %s", envelope.Error)
+	}
+	if got := string(envelope.ID); got != requestID {
+		t.Fatalf("response id=%s, want exact %s", got, requestID)
+	}
+}
+
 func TestProtocolSwitchHandler_ModernDiscoveryAndLegacySession(t *testing.T) {
 	type echoInput struct {
 		Value int `json:"value"`
