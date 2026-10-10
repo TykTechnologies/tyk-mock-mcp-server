@@ -67,6 +67,70 @@ func TestProtocolSwitchHandler_SelectsOnlyMatchingModernDeclarations(t *testing.
 	}
 }
 
+func TestProtocolSwitchHandler_JSONResponseOption(t *testing.T) {
+	tests := []struct {
+		name     string
+		env      string
+		wantJSON bool
+	}{
+		{name: "unset keeps SSE", env: "", wantJSON: false},
+		{name: "true returns JSON", env: "true", wantJSON: true},
+		{name: "1 returns JSON", env: "1", wantJSON: true},
+		{name: "false keeps SSE", env: "false", wantJSON: false},
+	}
+
+	const initialize = `{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"1"}}}`
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("MCP_JSON_RESPONSE", tt.env)
+			server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "1"}, nil)
+			httpServer := httptest.NewServer(newProtocolSwitchHandler(server))
+			defer httpServer.Close()
+			client := &http.Client{Timeout: 5 * time.Second}
+			defer client.CloseIdleConnections()
+
+			req, err := http.NewRequest(http.MethodPost, httpServer.URL, strings.NewReader(initialize))
+			if err != nil {
+				t.Fatal(err)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			// The SDK requires both media types in Accept, and returns 400 otherwise.
+			req.Header.Set("Accept", "application/json, text/event-stream")
+			resp, err := client.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", resp.StatusCode, body)
+			}
+			contentType := resp.Header.Get("Content-Type")
+			gotJSON := strings.HasPrefix(contentType, "application/json")
+			if gotJSON != tt.wantJSON {
+				t.Fatalf("Content-Type = %q, want JSON = %v", contentType, tt.wantJSON)
+			}
+			if gotJSON {
+				var envelope struct {
+					Result json.RawMessage `json:"result"`
+				}
+				if err := json.Unmarshal(body, &envelope); err != nil {
+					t.Fatalf("JSON body is not a single JSON-RPC message: %v (%s)", err, body)
+				}
+				if len(envelope.Result) == 0 {
+					t.Fatalf("missing result in JSON response: %s", body)
+				}
+			} else if !strings.HasPrefix(contentType, "text/event-stream") {
+				t.Fatalf("expected SSE or JSON, got Content-Type %q", contentType)
+			}
+		})
+	}
+}
+
 func TestProtocolSwitchHandler_ModernDiscoveryAndLegacySession(t *testing.T) {
 	type echoInput struct {
 		Value int `json:"value"`

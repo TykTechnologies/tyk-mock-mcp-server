@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"os"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -21,9 +22,20 @@ type protocolSwitchHandler struct {
 
 func newProtocolSwitchHandler(server *mcp.Server) *protocolSwitchHandler {
 	serverForRequest := func(*http.Request) *mcp.Server { return server }
+
+	// MCP_JSON_RESPONSE makes the SDK answer POST /mcp with application/json
+	// instead of text/event-stream. This matters for recording: when the
+	// upstream streams SSE, Tyk Pump records the request but not the response,
+	// so the analytics record lands in Elasticsearch/OpenSearch with an empty
+	// raw_response. Answering in JSON keeps the body observable and the full
+	// MCP exchange is captured. It is off by default so streaming semantics are
+	// unchanged for clients that expect SSE; when it is unset an empty
+	// (zero-value) option set is equivalent to passing nil.
+	jsonResponse := os.Getenv("MCP_JSON_RESPONSE") == "true" || os.Getenv("MCP_JSON_RESPONSE") == "1"
+
 	return &protocolSwitchHandler{
-		stateful:  mcp.NewStreamableHTTPHandler(serverForRequest, nil),
-		stateless: mcp.NewStreamableHTTPHandler(serverForRequest, &mcp.StreamableHTTPOptions{Stateless: true}),
+		stateful:  mcp.NewStreamableHTTPHandler(serverForRequest, &mcp.StreamableHTTPOptions{JSONResponse: jsonResponse}),
+		stateless: mcp.NewStreamableHTTPHandler(serverForRequest, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: jsonResponse}),
 	}
 }
 

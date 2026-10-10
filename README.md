@@ -186,6 +186,7 @@ Configure the server using environment variables:
 | `PORT` | HTTP server port | `7878` |
 | `DEBUG` | Enable debug logging (true/1) | `false` |
 | `WRITE_TIMEOUT` | HTTP write timeout in seconds (0 = disabled) | `0` |
+| `MCP_JSON_RESPONSE` | Answer `POST /mcp` with `application/json` instead of `text/event-stream` (true/1). Useful when an intermediary must record the response body | `false` |
 | `MCP_OAS_PATH` | Comma-separated OpenAPI 3 spec file(s) to expose as tools (see below). Unset = off | _unset_ |
 | `MCP_OAS_UPSTREAM_URL` | Base URL the OAS-derived tools call | `http://localhost:8181` |
 | `MCP_OAS_UPSTREAM_HOST` | `Host` header to send (e.g. a custom domain); empty leaves it as-is | _empty_ |
