@@ -13,9 +13,29 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
 
 const oauthFixturePrefix = "/fixtures/oauth"
+
+const oauthControlPrefix = "/fixtures/control/oauth"
+
+type oauthRefreshMode string
+
+const (
+	oauthRefreshSuccess          oauthRefreshMode = "success"
+	oauthRefreshDelay            oauthRefreshMode = "delay"
+	oauthRefreshTimeout          oauthRefreshMode = "timeout"
+	oauthRefreshRateLimit        oauthRefreshMode = "rate_limit"
+	oauthRefreshServerError      oauthRefreshMode = "server_error"
+	oauthRefreshInvalidGrant     oauthRefreshMode = "invalid_grant"
+	oauthRefreshMalformedSuccess oauthRefreshMode = "malformed_success"
+)
+
+type oauthRefreshControl struct {
+	Mode    oauthRefreshMode `json:"mode"`
+	DelayMS int              `json:"delay_ms,omitempty"`
+}
 
 type oauthFixtureConfig struct {
 	Issuer   string
@@ -71,6 +91,7 @@ type oauthFixtures struct {
 	refresh            map[string]oauthGrant
 	usedCodes          map[string]struct{}
 	usedRefresh        map[string]struct{}
+	refreshControl     oauthRefreshControl
 	counters           map[string]int
 	captures           []oauthCapture
 }
@@ -86,6 +107,7 @@ func newOAuthFixtures(mcpHandler http.Handler, config oauthFixtureConfig) *oauth
 		refresh:            make(map[string]oauthGrant),
 		usedCodes:          make(map[string]struct{}),
 		usedRefresh:        make(map[string]struct{}),
+		refreshControl:     oauthRefreshControl{Mode: oauthRefreshSuccess},
 		counters:           make(map[string]int),
 	}
 }
@@ -102,6 +124,7 @@ func (f *oauthFixtures) register(mux *http.ServeMux) {
 	mux.HandleFunc(oauthFixturePrefix+"/counters", f.serveCounters)
 	mux.HandleFunc(oauthFixturePrefix+"/captures", f.serveCaptures)
 	mux.HandleFunc(oauthFixturePrefix+"/reset", f.reset)
+	mux.HandleFunc(oauthControlPrefix+"/refresh", f.controlRefresh)
 	mux.Handle(oauthFixturePrefix+"/mcp", f.requireAccessToken(f.mcpHandler))
 }
 
@@ -517,7 +540,7 @@ func (f *oauthFixtures) token(w http.ResponseWriter, r *http.Request) {
 	case "authorization_code":
 		f.exchangeCode(w, r.Form)
 	case "refresh_token":
-		f.exchangeRefresh(w, r.Form)
+		f.exchangeRefresh(w, r, r.Form)
 	default:
 		writeOAuthError(w, http.StatusBadRequest, "unsupported_grant_type")
 	}
@@ -553,27 +576,91 @@ func (f *oauthFixtures) exchangeCode(w http.ResponseWriter, form url.Values) {
 	writeTokenResponse(w, accessToken, refreshToken, code.Scope)
 }
 
-func (f *oauthFixtures) exchangeRefresh(w http.ResponseWriter, form url.Values) {
+func (f *oauthFixtures) exchangeRefresh(w http.ResponseWriter, r *http.Request, form url.Values) {
 	refreshValue := form.Get("refresh_token")
 	f.mu.Lock()
 	grant, exists := f.refresh[refreshValue]
 	_, replayed := f.usedRefresh[refreshValue]
-	if exists && !replayed && singleValue(form, "client_id") && form.Get("client_id") == grant.ClientID &&
-		singleValue(form, "refresh_token") {
-		if !singleValue(form, "resource") || form.Get("resource") != grant.Resource {
-			f.mu.Unlock()
-			writeOAuthError(w, http.StatusBadRequest, "invalid_target")
-			return
-		}
-		delete(f.refresh, refreshValue)
-		f.usedRefresh[refreshValue] = struct{}{}
-		accessToken, refreshToken := f.issueGrantLocked(grant)
+	if !exists || replayed || !singleValue(form, "client_id") || form.Get("client_id") != grant.ClientID ||
+		!singleValue(form, "refresh_token") {
+		f.counters["refresh_invalid_requests"]++
 		f.mu.Unlock()
-		writeTokenResponse(w, accessToken, refreshToken, grant.Scope)
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant")
 		return
 	}
+	if !singleValue(form, "resource") || form.Get("resource") != grant.Resource {
+		f.counters["refresh_invalid_targets"]++
+		f.mu.Unlock()
+		writeOAuthError(w, http.StatusBadRequest, "invalid_target")
+		return
+	}
+	control := f.refreshControl
+	f.counters["refresh_attempts"]++
+	switch control.Mode {
+	case oauthRefreshRateLimit:
+		f.counters["refresh_rate_limited"]++
+	case oauthRefreshServerError:
+		f.counters["refresh_server_errors"]++
+	case oauthRefreshInvalidGrant:
+		f.counters["refresh_invalid_grants"]++
+		delete(f.refresh, refreshValue)
+		f.usedRefresh[refreshValue] = struct{}{}
+	case oauthRefreshMalformedSuccess:
+		f.counters["refresh_malformed_successes"]++
+	case oauthRefreshDelay:
+		f.counters["refresh_delays"]++
+	case oauthRefreshTimeout:
+		f.counters["refresh_timeouts"]++
+	}
 	f.mu.Unlock()
-	writeOAuthError(w, http.StatusBadRequest, "invalid_grant")
+
+	switch control.Mode {
+	case oauthRefreshRateLimit:
+		writeOAuthError(w, http.StatusTooManyRequests, "temporarily_unavailable")
+		return
+	case oauthRefreshServerError:
+		writeOAuthError(w, http.StatusServiceUnavailable, "server_error")
+		return
+	case oauthRefreshInvalidGrant:
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant")
+		return
+	case oauthRefreshMalformedSuccess:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.WriteString(w, `{"access_token":"fixture-malformed"`)
+		return
+	case oauthRefreshDelay:
+		delay := time.Duration(control.DelayMS) * time.Millisecond
+		select {
+		case <-time.After(delay):
+		case <-r.Context().Done():
+			return
+		}
+	case oauthRefreshTimeout:
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(30 * time.Second):
+			writeOAuthError(w, http.StatusGatewayTimeout, "temporarily_unavailable")
+			return
+		}
+	}
+
+	f.mu.Lock()
+	grant, exists = f.refresh[refreshValue]
+	_, replayed = f.usedRefresh[refreshValue]
+	if !exists || replayed {
+		f.counters["refresh_invalid_requests"]++
+		f.mu.Unlock()
+		writeOAuthError(w, http.StatusBadRequest, "invalid_grant")
+		return
+	}
+	delete(f.refresh, refreshValue)
+	f.usedRefresh[refreshValue] = struct{}{}
+	accessToken, refreshToken := f.issueGrantLocked(grant)
+	f.counters["refresh_successes"]++
+	f.mu.Unlock()
+	writeTokenResponse(w, accessToken, refreshToken, grant.Scope)
 }
 
 func (f *oauthFixtures) issueGrantLocked(grant oauthGrant) (accessToken, refreshToken string) {
@@ -669,6 +756,72 @@ func (f *oauthFixtures) serveCaptures(w http.ResponseWriter, r *http.Request) {
 	writeOAuthJSON(w, http.StatusOK, slices.Clone(f.captures))
 }
 
+func (f *oauthFixtures) controlRefresh(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		f.mu.Lock()
+		control := f.refreshControl
+		counters := make(map[string]int)
+		for name, value := range f.counters {
+			if strings.HasPrefix(name, "refresh_") {
+				counters[name] = value
+			}
+		}
+		f.mu.Unlock()
+		writeOAuthJSON(w, http.StatusOK, map[string]any{"control": control, "counters": counters})
+	case http.MethodPut:
+		if r.Header.Get("Content-Type") != "application/json" {
+			writeOAuthError(w, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<10))
+		if err != nil {
+			writeOAuthError(w, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		var fields map[string]json.RawMessage
+		if decodeStrictJSONObject(body, &fields) != nil {
+			writeOAuthError(w, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		for name := range fields {
+			if name != "mode" && name != "delay_ms" {
+				writeOAuthError(w, http.StatusBadRequest, "invalid_request")
+				return
+			}
+		}
+		var control oauthRefreshControl
+		if json.Unmarshal(body, &control) != nil || !validOAuthRefreshControl(control) {
+			writeOAuthError(w, http.StatusBadRequest, "invalid_request")
+			return
+		}
+		f.mu.Lock()
+		f.refreshControl = control
+		f.mu.Unlock()
+		writeOAuthJSON(w, http.StatusOK, control)
+	case http.MethodDelete:
+		f.mu.Lock()
+		f.refreshControl = oauthRefreshControl{Mode: oauthRefreshSuccess}
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	default:
+		w.Header().Set("Allow", "GET, PUT, DELETE")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	}
+}
+
+func validOAuthRefreshControl(control oauthRefreshControl) bool {
+	switch control.Mode {
+	case oauthRefreshDelay:
+		return control.DelayMS > 0 && control.DelayMS <= 30_000
+	case oauthRefreshSuccess, oauthRefreshTimeout, oauthRefreshRateLimit, oauthRefreshServerError,
+		oauthRefreshInvalidGrant, oauthRefreshMalformedSuccess:
+		return control.DelayMS == 0
+	default:
+		return false
+	}
+}
+
 func (f *oauthFixtures) reset(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodDelete {
 		w.WriteHeader(http.StatusMethodNotAllowed)
@@ -683,6 +836,7 @@ func (f *oauthFixtures) reset(w http.ResponseWriter, r *http.Request) {
 	f.refresh = make(map[string]oauthGrant)
 	f.usedCodes = make(map[string]struct{})
 	f.usedRefresh = make(map[string]struct{})
+	f.refreshControl = oauthRefreshControl{Mode: oauthRefreshSuccess}
 	f.counters = make(map[string]int)
 	f.captures = nil
 	f.mu.Unlock()

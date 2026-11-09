@@ -175,6 +175,7 @@ PORT=3000 ./tyk-mock-mcp-server
 - OAuth-protected MCP: `http://localhost:7878/fixtures/oauth/mcp`
 - OAuth registration/authorization/token: `/fixtures/oauth/register`, `/fixtures/oauth/authorize`, `/fixtures/oauth/token`
 - OAuth request evidence: `/fixtures/oauth/counters`, `/fixtures/oauth/captures` (reset with `DELETE /fixtures/oauth/reset`)
+- OAuth refresh fault control: `GET|PUT|DELETE /fixtures/control/oauth/refresh`
 - Health: `http://localhost:7878/health`
 
 ### Configuration
@@ -202,6 +203,13 @@ callback parsing cases. Authorization-server metadata accepts `issuer=wrong`
 and `iss_support=missing`. Access codes and refresh tokens are one-use; refresh
 succeeds by rotating both tokens. Capture output records whether authorization
 was present but never stores bearer values.
+
+The refresh control accepts JSON such as `{"mode":"rate_limit"}` or
+`{"mode":"delay","delay_ms":250}`. Supported modes are `success`, `delay`,
+`timeout`, `rate_limit`, `server_error`, `invalid_grant`, and
+`malformed_success`. `GET` returns only the active mode and aggregate refresh
+counters; token and grant values are never included. `DELETE` restores
+`success` mode.
 
 ### OpenAPI-driven tools
 
