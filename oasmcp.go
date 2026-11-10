@@ -166,7 +166,7 @@ func makeHandler(b binding, cfg UpstreamConfig) mcp.ToolHandler {
 			body, _ = json.Marshal(obj)
 		}
 
-		out := doUpstreamCall(ctx, cfg, b.method, p, body)
+		out := doUpstreamCall(ctx, cfg, b.method, p, body, toolRequestMetadata(req))
 		js, _ := json.Marshal(out)
 		return &mcp.CallToolResult{
 			Content:           []mcp.Content{&mcp.TextContent{Text: string(js)}},
@@ -178,7 +178,7 @@ func makeHandler(b binding, cfg UpstreamConfig) mcp.ToolHandler {
 
 // doUpstreamCall issues the rebuilt request to the upstream, replaying auth and
 // trace context read from the current request's captured metadata.
-func doUpstreamCall(ctx context.Context, cfg UpstreamConfig, method, path string, body []byte) UpstreamCallOutput {
+func doUpstreamCall(ctx context.Context, cfg UpstreamConfig, method, path string, body []byte, meta *HTTPRequestMetadata) UpstreamCallOutput {
 	out := UpstreamCallOutput{URL: cfg.Host + path}
 	var rdr io.Reader
 	if body != nil {
@@ -193,7 +193,6 @@ func doUpstreamCall(ctx context.Context, cfg UpstreamConfig, method, path string
 		req.Host = cfg.Host
 		req.Header.Set("Host", cfg.Host)
 	}
-	meta := getCurrentRequestMetadata()
 	if cfg.ForwardAuth && meta != nil {
 		if b := meta.Headers["Authorization"]; b != "" {
 			req.Header.Set("Authorization", b)

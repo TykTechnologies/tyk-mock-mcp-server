@@ -64,9 +64,31 @@ func getCurrentRequestMetadata() *HTTPRequestMetadata {
 	return currentRequestMeta
 }
 
-func extractRealIP(r *http.Request) string {
+// toolRequestMetadata returns the metadata of the HTTP request that carried this tool call.
+// The global capture is shared by every connection, so concurrent clients would read each
+// other's headers; the SDK passes the carrying request's headers in req.Extra.Header.
+func toolRequestMetadata(req *mcp.CallToolRequest) *HTTPRequestMetadata {
+	captured := getCurrentRequestMetadata()
+	if req == nil || req.Extra == nil || req.Extra.Header == nil {
+		return captured
+	}
+	headers := make(map[string]string, len(req.Extra.Header))
+	for name, values := range req.Extra.Header {
+		if len(values) > 0 {
+			headers[name] = values[0]
+		}
+	}
+	realIP := realIPFromHeaders(req.Extra.Header)
+	if realIP == "" {
+		// RemoteAddr is not part of Extra; proxied calls always carry a forwarding header.
+		realIP = captured.RealIP
+	}
+	return &HTTPRequestMetadata{RemoteAddr: captured.RemoteAddr, Headers: headers, RealIP: realIP}
+}
+
+func realIPFromHeaders(h http.Header) string {
 	// Check X-Forwarded-For header first
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+	if xff := h.Get("X-Forwarded-For"); xff != "" {
 		// X-Forwarded-For can contain multiple IPs, take the first one
 		if idx := strings.Index(xff, ","); idx != -1 {
 			return strings.TrimSpace(xff[:idx])
@@ -74,8 +96,15 @@ func extractRealIP(r *http.Request) string {
 		return strings.TrimSpace(xff)
 	}
 	// Check X-Real-IP header
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+	if xri := h.Get("X-Real-IP"); xri != "" {
 		return strings.TrimSpace(xri)
+	}
+	return ""
+}
+
+func extractRealIP(r *http.Request) string {
+	if ip := realIPFromHeaders(r.Header); ip != "" {
+		return ip
 	}
 	// Fall back to RemoteAddr
 	if idx := strings.LastIndex(r.RemoteAddr, ":"); idx != -1 {
@@ -369,7 +398,7 @@ func registerTools(server *mcp.Server, s *store.Store) {
 		Description: "Echo back request data in httpbin.org/anything format with real HTTP request metadata",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, input models.GetAnythingInput) (*mcp.CallToolResult, models.GetAnythingOutput, error) {
 		// Get real HTTP request metadata
-		requestMeta := getCurrentRequestMetadata()
+		requestMeta := toolRequestMetadata(req)
 
 		// Set defaults
 		method := input.Method
