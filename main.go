@@ -668,7 +668,8 @@ func captureRequestMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func startHTTPServer(mcpServer *mcp.Server, port string) *http.Server {
+// newHTTPMux routes /mcp, the fixture endpoints, and (when MCP_ADMIN_ENABLED=true) the admin API.
+func newHTTPMux(mcpServer *mcp.Server) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	handler := newProtocolSwitchHandler(mcpServer)
@@ -697,6 +698,21 @@ func startHTTPServer(mcpServer *mcp.Server, port string) *http.Server {
 		w.WriteHeader(http.StatusOK)
 		fmt.Fprintf(w, `{"status":"healthy","version":"%s"}`, serverVersion)
 	})
+
+	if adminEnabled() {
+		admin, err := newAdminAPI(mcpServer)
+		if err != nil {
+			log.Fatalf("admin API: %v", err)
+		}
+		admin.register(mux)
+		log.Println("Admin API enabled at /admin (MCP_ADMIN_ENABLED=true)")
+	}
+
+	return mux
+}
+
+func startHTTPServer(mcpServer *mcp.Server, port string) *http.Server {
+	mux := newHTTPMux(mcpServer)
 
 	writeTimeout := parseEnvDuration("WRITE_TIMEOUT", 0)
 
