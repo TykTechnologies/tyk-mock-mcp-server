@@ -668,7 +668,8 @@ func captureRequestMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// newHTTPMux routes /mcp, the fixture endpoints, and (when MCP_ADMIN_ENABLED=true) the admin API.
+// newHTTPMux routes /mcp, the fixture endpoints, and the admin API unless
+// MCP_ADMIN_ENABLED=false turns it off.
 func newHTTPMux(mcpServer *mcp.Server) *http.ServeMux {
 	mux := http.NewServeMux()
 
@@ -705,7 +706,7 @@ func newHTTPMux(mcpServer *mcp.Server) *http.ServeMux {
 			log.Fatalf("admin API: %v", err)
 		}
 		admin.register(mux)
-		log.Println("Admin API enabled at /admin (MCP_ADMIN_ENABLED=true)")
+		log.Println("Admin API enabled at /admin (test only, no authentication); set MCP_ADMIN_ENABLED=false to turn it off")
 	}
 
 	return mux

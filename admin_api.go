@@ -8,14 +8,25 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// adminEnabled reports whether the runtime admin API is switched on. It is off
-// by default so the server's tool surface stays fixed unless a test opts in.
-func adminEnabled() bool { return os.Getenv("MCP_ADMIN_ENABLED") == "true" }
+// adminEnabled reports whether the runtime admin API is switched on. It is on
+// by default, because this is a test mock and call capture records only the
+// tool name, its arguments and Mcp-Name. MCP_ADMIN_ENABLED set to "false" or
+// "0", in any case and ignoring surrounding spaces, turns it off; any other
+// value, including unset or empty, leaves it on.
+func adminEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("MCP_ADMIN_ENABLED"))) {
+	case "false", "0":
+		return false
+	default:
+		return true
+	}
+}
 
 // adminToolSpec is the POST /admin/tools body.
 type adminToolSpec struct {
