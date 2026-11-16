@@ -108,7 +108,6 @@ func (c *rawMCPClient) listToolsRaw() map[string]map[string]any {
 
 func newAdminTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	t.Setenv("MCP_ADMIN_ENABLED", "true")
 	srv := httptest.NewServer(newHTTPMux(setupServer()))
 	t.Cleanup(srv.Close)
 	return srv
@@ -130,20 +129,21 @@ func adminRequest(t *testing.T, method, url, body string) (int, []byte) {
 	return resp.StatusCode, raw
 }
 
-func TestAdminAPI_DisabledByDefault(t *testing.T) {
-	t.Setenv("MCP_ADMIN_ENABLED", "")
-	srv := httptest.NewServer(newHTTPMux(setupServer()))
-	defer srv.Close()
+func TestAdminAPI_RoutesAreServed(t *testing.T) {
+	srv := newAdminTestServer(t)
 
-	for _, tc := range []struct{ method, path string }{
-		{http.MethodPost, "/admin/tools"},
-		{http.MethodDelete, "/admin/tools"},
-		{http.MethodGet, "/admin/calls"},
-		{http.MethodPost, "/admin/fixtures/github"},
+	for _, tc := range []struct {
+		method, path, body string
+		want               int
+	}{
+		{http.MethodGet, "/admin/tools", "", http.StatusOK},
+		{http.MethodGet, "/admin/calls", "", http.StatusOK},
+		{http.MethodPost, "/admin/fixtures/github", "", http.StatusCreated},
+		{http.MethodDelete, "/admin/tools", "", http.StatusNoContent},
+		{http.MethodDelete, "/admin/calls", "", http.StatusNoContent},
 	} {
-		status, _ := adminRequest(t, tc.method, srv.URL+tc.path, `{"name":"x"}`)
-		if status != http.StatusNotFound {
-			t.Errorf("%s %s status = %d, want 404", tc.method, tc.path, status)
+		if status, raw := adminRequest(t, tc.method, srv.URL+tc.path, tc.body); status != tc.want {
+			t.Errorf("%s %s status = %d, want %d: %s", tc.method, tc.path, status, tc.want, raw)
 		}
 	}
 }
@@ -478,18 +478,5 @@ func TestAdminAPI_RecordsCallsToUnknownToolsAndMismatchedLegacyMcpName(t *testin
 	}
 	if c := calls.Calls[2]; c.Tool != "generate_uuid" || c.McpNameHeader != "renamed_uuid" {
 		t.Fatalf("legacy session must record the Mcp-Name header as sent: %s", raw)
-	}
-}
-
-func TestAdminAPI_OnlyExactTrueEnablesIt(t *testing.T) {
-	for _, value := range []string{"1", "TRUE", "True", "yes"} {
-		t.Run(value, func(t *testing.T) {
-			t.Setenv("MCP_ADMIN_ENABLED", value)
-			srv := httptest.NewServer(newHTTPMux(setupServer()))
-			defer srv.Close()
-			if status, _ := adminRequest(t, http.MethodGet, srv.URL+"/admin/calls", ""); status != http.StatusNotFound {
-				t.Errorf("status = %d, want 404", status)
-			}
-		})
 	}
 }

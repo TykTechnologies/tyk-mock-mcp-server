@@ -6,16 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os"
 	"sort"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
-
-// adminEnabled reports whether the runtime admin API is switched on. It is off
-// by default so the server's tool surface stays fixed unless a test opts in.
-func adminEnabled() bool { return os.Getenv("MCP_ADMIN_ENABLED") == "true" }
 
 // adminToolSpec is the POST /admin/tools body.
 type adminToolSpec struct {

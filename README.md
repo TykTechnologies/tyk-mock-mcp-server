@@ -194,7 +194,6 @@ Configure the server using environment variables:
 | `MCP_OAS_FORWARD_TRACE` | Forward the inbound W3C trace context (`traceparent`/`tracestate`) | `true` |
 | `OAUTH_FIXTURE_ISSUER` | Exact issuer returned by the deterministic OAuth fixture | request origin + `/fixtures/oauth` |
 | `OAUTH_FIXTURE_RESOURCE` | Exact audience required by authorize/token and fixture bearer tokens | request origin + `/fixtures/oauth/mcp` |
-| `MCP_ADMIN_ENABLED` | Enable the runtime admin API under `/admin` (see below). Exactly `true` enables it | _unset_ (off) |
 
 The OAuth fixture accepts public clients with exact registered HTTP(S) redirect
 URIs and requires authorization code with S256 plus an exact resource. Use
@@ -236,10 +235,11 @@ also call `RegisterFromOAS(server, specPath, UpstreamConfig{...})` directly.
 
 ### Admin API for dynamic tools and call capture
 
-With `MCP_ADMIN_ENABLED=true` the server exposes an admin API that lets tests
-control the tool catalogue served on `/mcp` and observe the `tools/call`
-requests it receives. Any other value, including `1` or `TRUE`, leaves it off:
-every `/admin` route returns `404` and the server behaves exactly as before.
+The server always exposes an admin API under `/admin` that lets tests control
+the tool catalogue served on `/mcp` and observe the `tools/call` requests it
+receives. It is for tests only: it has **no authentication**, so never expose
+it beyond a test network. Call capture records only the tool name, its
+arguments and the `Mcp-Name` header.
 
 | Method and path | Effect |
 |-----------------|--------|
@@ -298,7 +298,7 @@ a required `repo` string. Only `list_issues` carries an annotation
 (`readOnlyHint: true`), and `delete_repo` has none.
 
 ```bash
-MCP_ADMIN_ENABLED=true ./tyk-mock-mcp-server
+./tyk-mock-mcp-server
 curl -X POST localhost:7878/admin/fixtures/github
 curl -X DELETE localhost:7878/admin/tools/remove_repo   # simulate upstream drift
 curl localhost:7878/admin/calls
