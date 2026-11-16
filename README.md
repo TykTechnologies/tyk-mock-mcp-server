@@ -194,6 +194,7 @@ Configure the server using environment variables:
 | `MCP_OAS_FORWARD_TRACE` | Forward the inbound W3C trace context (`traceparent`/`tracestate`) | `true` |
 | `OAUTH_FIXTURE_ISSUER` | Exact issuer returned by the deterministic OAuth fixture | request origin + `/fixtures/oauth` |
 | `OAUTH_FIXTURE_RESOURCE` | Exact audience required by authorize/token and fixture bearer tokens | request origin + `/fixtures/oauth/mcp` |
+| `MCP_ADMIN_ENABLED` | Enable the runtime admin API under `/admin` (see below). Exactly `true` enables it | _unset_ (off) |
 
 The OAuth fixture accepts public clients with exact registered HTTP(S) redirect
 URIs and requires authorization code with S256 plus an exact resource. Use
@@ -232,6 +233,76 @@ MCP_OAS_UPSTREAM_HOST=api.acme.internal \
 This makes the server's tool surface match a real API contract — handy for
 integration tests that need an MCP backend mirroring an OpenAPI spec. Tests can
 also call `RegisterFromOAS(server, specPath, UpstreamConfig{...})` directly.
+
+### Admin API for dynamic tools and call capture
+
+With `MCP_ADMIN_ENABLED=true` the server exposes an admin API that lets tests
+control the tool catalogue served on `/mcp` and observe the `tools/call`
+requests it receives. Any other value, including `1` or `TRUE`, leaves it off:
+every `/admin` route returns `404` and the server behaves exactly as before.
+
+| Method and path | Effect |
+|-----------------|--------|
+| `POST /admin/tools` | Register, or replace, a dynamic echo tool. Returns `201` with the tool as served; `409` for a built-in or OAS tool name; `400` for an invalid body |
+| `GET /admin/tools` | `{"tools":[...]}`: the dynamic tools exactly as `tools/list` serves them |
+| `DELETE /admin/tools/{name}` | Remove one dynamic tool (`204`; `404` if it is not dynamic) |
+| `DELETE /admin/tools` | Remove every dynamic tool (`204`); built-in and OAS tools remain |
+| `POST /admin/fixtures/github` | Register `create_issue`, `list_issues`, `remove_repo`, `update_repo` and `delete_repo` as dynamic tools (`201`) |
+| `GET /admin/calls` | `{"calls":[{"tool","arguments","mcpNameHeader"}]}` for every `tools/call` received, in order |
+| `DELETE /admin/calls` | Clear the recorded calls (`204`) |
+
+The `POST /admin/tools` body:
+
+```json
+{
+  "name": "create_issue",
+  "description": "Creates an issue",
+  "title": "Create issue",
+  "inputSchema": {"type": "object", "properties": {"repo": {"type": "string"}}},
+  "annotations": {"title": "Create", "readOnlyHint": false, "destructiveHint": false,
+                  "idempotentHint": true, "openWorldHint": true}
+}
+```
+
+Only `name` is required, and unknown fields are rejected with `400`. Built-in
+and OAS tool names are captured at startup and can be neither replaced nor
+removed. `inputSchema` defaults to `{"type":"object"}` and must have
+`"type": "object"`; a schema the MCP SDK refuses (for example an invalid
+`x-mcp-header` annotation) returns `400` and registers nothing. Without `annotations` the listed tool has no
+`annotations` field. `destructiveHint` and `openWorldHint` are emitted only when
+supplied, so an explicit `false` stays distinct from absent. The MCP SDK always
+emits `readOnlyHint` and `idempotentHint` once any annotation is set, as `false`
+when not supplied; the `201` response and `GET /admin/tools` show that served
+shape.
+
+Calling a dynamic tool returns the name the server received and the raw
+arguments, as structured content and as JSON text:
+
+```json
+{"tool": "create_issue", "arguments": {"repo": "tyk", "title": "bug"}}
+```
+
+Calls are recorded before dispatch, so calls to built-in tools and to unknown
+names appear in `/admin/calls` too. `mcpNameHeader` is the `Mcp-Name` request
+header exactly as sent and is omitted when the request had none. On sessions
+using protocol `2026-07-28` or later the SDK rejects a missing or mismatched
+`Mcp-Name` with HTTP `400` (JSON-RPC `-32020`) before the call is recorded, so a
+mismatch between `tool` and `mcpNameHeader` can only be observed on legacy
+sessions. Tool changes trigger the SDK's debounced
+`notifications/tools/list_changed` to connected sessions and show up in the
+next `tools/list`.
+
+The GitHub fixture gives `create_issue` the description `Creates an issue` and
+an input schema with required `repo` and `title` strings; the other tools take
+a required `repo` string. Only `list_issues` carries an annotation
+(`readOnlyHint: true`), and `delete_repo` has none.
+
+```bash
+MCP_ADMIN_ENABLED=true ./tyk-mock-mcp-server
+curl -X POST localhost:7878/admin/fixtures/github
+curl -X DELETE localhost:7878/admin/tools/remove_repo   # simulate upstream drift
+curl localhost:7878/admin/calls
+```
 
 ## MCP Client Configuration
 
