@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 )
@@ -109,7 +108,6 @@ func (c *rawMCPClient) listToolsRaw() map[string]map[string]any {
 
 func newAdminTestServer(t *testing.T) *httptest.Server {
 	t.Helper()
-	t.Setenv("MCP_ADMIN_ENABLED", "true")
 	srv := httptest.NewServer(newHTTPMux(setupServer()))
 	t.Cleanup(srv.Close)
 	return srv
@@ -131,61 +129,22 @@ func adminRequest(t *testing.T, method, url, body string) (int, []byte) {
 	return resp.StatusCode, raw
 }
 
-func adminCallsStatus(t *testing.T, value string, set bool) int {
-	t.Helper()
-	if set {
-		t.Setenv("MCP_ADMIN_ENABLED", value)
-	} else {
-		unsetAdminEnabled(t)
-	}
-	srv := httptest.NewServer(newHTTPMux(setupServer()))
-	defer srv.Close()
-	status, _ := adminRequest(t, http.MethodGet, srv.URL+"/admin/calls", "")
-	return status
-}
+func TestAdminAPI_RoutesAreServed(t *testing.T) {
+	srv := newAdminTestServer(t)
 
-// unsetAdminEnabled removes MCP_ADMIN_ENABLED for the test and restores it
-// afterwards.
-func unsetAdminEnabled(t *testing.T) {
-	t.Helper()
-	t.Setenv("MCP_ADMIN_ENABLED", "")
-	if err := os.Unsetenv("MCP_ADMIN_ENABLED"); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestAdminAPI_OnByDefault(t *testing.T) {
-	if status := adminCallsStatus(t, "", false); status != http.StatusOK {
-		t.Errorf("unset: status = %d, want 200", status)
-	}
-	for _, value := range []string{"", " ", "true", "TRUE", "1", "yes"} {
-		t.Run("value="+value, func(t *testing.T) {
-			if status := adminCallsStatus(t, value, true); status != http.StatusOK {
-				t.Errorf("status = %d, want 200", status)
-			}
-		})
-	}
-}
-
-func TestAdminAPI_FalseOrZeroTurnsItOff(t *testing.T) {
-	for _, value := range []string{"false", "FALSE", "False", " false ", "0", " 0"} {
-		t.Run("value="+value, func(t *testing.T) {
-			t.Setenv("MCP_ADMIN_ENABLED", value)
-			srv := httptest.NewServer(newHTTPMux(setupServer()))
-			defer srv.Close()
-
-			for _, tc := range []struct{ method, path string }{
-				{http.MethodPost, "/admin/tools"},
-				{http.MethodDelete, "/admin/tools"},
-				{http.MethodGet, "/admin/calls"},
-				{http.MethodPost, "/admin/fixtures/github"},
-			} {
-				status, _ := adminRequest(t, tc.method, srv.URL+tc.path, `{"name":"x"}`)
-				if status != http.StatusNotFound {
-					t.Errorf("%s %s status = %d, want 404", tc.method, tc.path, status)
-				}
-			}
-		})
+	for _, tc := range []struct {
+		method, path, body string
+		want               int
+	}{
+		{http.MethodGet, "/admin/tools", "", http.StatusOK},
+		{http.MethodGet, "/admin/calls", "", http.StatusOK},
+		{http.MethodPost, "/admin/fixtures/github", "", http.StatusCreated},
+		{http.MethodDelete, "/admin/tools", "", http.StatusNoContent},
+		{http.MethodDelete, "/admin/calls", "", http.StatusNoContent},
+	} {
+		if status, raw := adminRequest(t, tc.method, srv.URL+tc.path, tc.body); status != tc.want {
+			t.Errorf("%s %s status = %d, want %d: %s", tc.method, tc.path, status, tc.want, raw)
+		}
 	}
 }
 
